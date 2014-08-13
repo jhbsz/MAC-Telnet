@@ -178,6 +178,18 @@ static struct mt_connection *list_find_connection(unsigned short seskey, unsigne
 	return NULL;
 }
 
+static struct mt_connection *list_find_connection_by_fd(int fd) {
+	struct mt_connection *p;
+
+	list_for_each_entry(p, &connections, list)
+		if (tunnel_conn && p->fwdfd == fd)
+			return p;
+		else if (!tunnel_conn && p->ptsfd == fd)
+			return p;
+
+	return NULL;
+}
+
 static int find_socket(unsigned char *mac) {
 	int i;
 
@@ -929,11 +941,78 @@ void sighup_handler() {
 	}
 }
 
+static void recv_telnet(int fd)
+{
+	int result;
+	unsigned char buff[1500];
+	struct sockaddr_in saddress;
+	unsigned int slen = sizeof(saddress);
+	result = recvfrom(fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+	handle_packet(buff, result, &saddress);
+}
+
+static void recv_mndp(int fd)
+{
+	int result;
+	unsigned char buff[1500];
+	struct sockaddr_in saddress;
+	unsigned int slen = sizeof(saddress);
+	result = recvfrom(fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+
+	/* Handle MNDP broadcast request, max 1 rps */
+	if (result == 4 && time(NULL) - last_mndp_time > 0) {
+		mndp_broadcast();
+		time(&last_mndp_time);
+	}
+}
+
+static void recv_bulk(int fd)
+{
+	int result;
+	struct mt_connection *p;
+	struct mt_packet pdata;
+	unsigned char keydata[1024];
+	int datalen,plen;
+
+	p = list_find_connection_by_fd(fd);
+
+	if (!p)
+		return;
+
+	/* Read it */
+	if (!tunnel_conn) {
+		datalen = read(p->ptsfd, &keydata, 1024);
+	} else {
+		datalen = read(p->fwdfd, &keydata, 1024);
+	}
+	if (datalen > 0) {
+		/* Send it */
+		init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+		plen = add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, &keydata, datalen);
+		p->outcounter += plen;
+		p->wait_for_ack = 1;
+		result = send_udp(p, &pdata);
+	} else {
+		/* Shell exited */
+		init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+		send_udp(p, &pdata);
+		if (tunnel_conn) {
+			syslog(LOG_INFO, _("(%d) Connection to server closed."), p->seskey);
+		}
+		else if (p->username != NULL) {
+			syslog(LOG_INFO, _("(%d) Connection to user %s closed."), p->seskey, p->username);
+		} else {
+			syslog(LOG_INFO, _("(%d) Connection closed."), p->seskey);
+		}
+		list_remove_connection(p);
+	}
+}
+
 /*
  * TODO: Rewrite main() when all sub-functionality is tested
  */
 int main (int argc, char **argv) {
-	int result,i;
+	int i;
 	struct sockaddr_in si_me;
 	struct sockaddr_in si_me_mndp;
 	struct timeval timeout;
@@ -1158,61 +1237,22 @@ int main (int argc, char **argv) {
 			/* Handle data from clients
 			 TODO: Enable broadcast support (without raw sockets)
 			 */
-			if (FD_ISSET(insockfd, &read_fds)) {
-				unsigned char buff[1500];
-				struct sockaddr_in saddress;
-				unsigned int slen = sizeof(saddress);
-				result = recvfrom(insockfd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
-				handle_packet(buff, result, &saddress);
-			}
-			if (FD_ISSET(mndpsockfd, &read_fds)) {
-				unsigned char buff[1500];
-				struct sockaddr_in saddress;
-				unsigned int slen = sizeof(saddress);
-				result = recvfrom(mndpsockfd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+			if (FD_ISSET(insockfd, &read_fds))
+				recv_telnet(insockfd);
 
-				/* Handle MNDP broadcast request, max 1 rps */
-				if (result == 4 && time(NULL) - last_mndp_time > 0) {
-					mndp_broadcast();
-					time(&last_mndp_time);
-				}
-			}
+			if (FD_ISSET(mndpsockfd, &read_fds))
+				recv_mndp(mndpsockfd);
+
 			/* Handle data from terminal sessions or tunnels. */
 			list_for_each_entry_safe(p, tmp, &connections, list) {
 				/* Check if we have data ready in the pty / tunnel buffer for the active session */
 				if ((p->state == STATE_ACTIVE && p->wait_for_ack == 0) &&
 						((!tunnel_conn && p->ptsfd > 0 && FD_ISSET(p->ptsfd, &read_fds))
 						|| (tunnel_conn && p->fwdfd > 0 && FD_ISSET(p->fwdfd, &read_fds)))) {
-					unsigned char keydata[1024];
-					int datalen,plen;
-
-					/* Read it */
-					if (!tunnel_conn) {
-						datalen = read(p->ptsfd, &keydata, 1024);
-					} else {
-						datalen = read(p->fwdfd, &keydata, 1024);
-					}
-					if (datalen > 0) {
-						/* Send it */
-						init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-						plen = add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, &keydata, datalen);
-						p->outcounter += plen;
-						p->wait_for_ack = 1;
-						result = send_udp(p, &pdata);
-					} else {
-						/* Shell exited */
-						init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-						send_udp(p, &pdata);
-						if (tunnel_conn) {
-							syslog(LOG_INFO, _("(%d) Connection to server closed."), p->seskey);
-						}
-						else if (p->username != NULL) {
-							syslog(LOG_INFO, _("(%d) Connection to user %s closed."), p->seskey, p->username);
-						} else {
-							syslog(LOG_INFO, _("(%d) Connection closed."), p->seskey);
-						}
-						list_remove_connection(p);
-					}
+					if (!tunnel_conn)
+						recv_bulk(p->ptsfd);
+					else
+						recv_bulk(p->fwdfd);
 				}
 				else if (!tunnel_conn && p->state == STATE_ACTIVE && p->ptsfd > 0 && p->wait_for_ack == 1 && FD_ISSET(p->ptsfd, &read_fds)) {
 					printf(_("(%d) Waiting for ack\n"), p->seskey);
