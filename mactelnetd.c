@@ -53,6 +53,9 @@
 #include <utmp.h>
 #include <syslog.h>
 #include <sys/utsname.h>
+
+#include <libubox/list.h>
+
 #include "md5.h"
 #include "protocol.h"
 #include "console.h"
@@ -84,7 +87,7 @@ static int use_raw_socket = 0;
 static int tunnel_conn = 0;
 static char nonpriv_username[255];
 
-static struct in_addr sourceip; 
+static struct in_addr sourceip;
 static struct in_addr destip;
 static int sourceport;
 static int fwdport = MT_TUNNEL_SERVER_PORT;
@@ -134,34 +137,19 @@ struct mt_connection {
 	unsigned short terminal_height;
 	char terminal_type[30];
 
-	struct mt_connection *next;
+	struct list_head list;
 };
 
 static void uwtmp_login(struct mt_connection *);
 static void uwtmp_logout(struct mt_connection *);
 
-static struct mt_connection *connections_head = NULL;
+static LIST_HEAD(connections);
 
 static void list_add_connection(struct mt_connection *conn) {
-	struct mt_connection *p;
-	struct mt_connection *last;
-	if (connections_head == NULL) {
-		connections_head = conn;
-		connections_head->next = NULL;
-		return;
-	}
-	for (p = connections_head; p != NULL; p = p->next) {last = p;}
-	last->next = conn;
-	conn->next = NULL;
+	list_add_tail(&conn->list, &connections);
 }
 
 static void list_remove_connection(struct mt_connection *conn) {
-	struct mt_connection *p;
-	struct mt_connection *last;
-	if (connections_head == NULL) {
-		return;
-	}
-
 	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->ptsfd > 0) {
 		close(conn->ptsfd);
 	}
@@ -176,34 +164,16 @@ static void list_remove_connection(struct mt_connection *conn) {
 		uwtmp_logout(conn);
 	}
 
-	if (connections_head == conn) {
-		connections_head = conn->next;
-		free(conn);
-		return;
-	}
-
-	for (p = connections_head; p != NULL; p = p->next) {
-		if (p == conn) {
-			last->next = p->next;
-			free(p);
-			return;
-		}
-		last = p;
-	}
+	list_del(&conn->list);
+	free(conn);
 }
 
 static struct mt_connection *list_find_connection(unsigned short seskey, unsigned char *srcmac) {
 	struct mt_connection *p;
 
-	if (connections_head == NULL) {
-		return NULL;
-	}
-
-	for (p = connections_head; p != NULL; p = p->next) {
-		if (p->seskey == seskey && memcmp(srcmac, p->srcmac, ETH_ALEN) == 0) {
+	list_for_each_entry(p, &connections, list)
+		if (p->seskey == seskey && memcmp(srcmac, p->srcmac, ETH_ALEN) == 0)
 			return p;
-		}
-	}
 
 	return NULL;
 }
@@ -317,7 +287,7 @@ static void display_nologin() {
 			putchar(c);
 		}
 		fclose(fp);
-	}	
+	}
 }
 
 static void uwtmp_login(struct mt_connection *conn) {
@@ -325,7 +295,7 @@ static void uwtmp_login(struct mt_connection *conn) {
 	pid_t pid;
 
 	pid = getpid();
-	
+
 	char *line = ttyname(conn->slavefd);
 	if (strncmp(line, "/dev/", 5) == 0) {
 		line += 5;
@@ -340,7 +310,7 @@ static void uwtmp_login(struct mt_connection *conn) {
 	strncpy(utent.ut_id, utent.ut_line + 3, sizeof(utent.ut_id));
 	strncpy(utent.ut_host, ether_ntoa((const struct ether_addr *)conn->srcmac), sizeof(utent.ut_host));
 	time((time_t *)&(utent.ut_time));
-	
+
 	/* Update utmp and/or wtmp */
 	setutent();
 	pututline(&utent);
@@ -375,7 +345,7 @@ static void uwtmp_logout(struct mt_connection *conn) {
 
 static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, char *message) {
 	struct mt_packet pdata;
-	
+
 	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, message, strlen(message));
 	send_udp(curconn, &pdata);
@@ -490,14 +460,14 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 				if (!interfaces[i].in_use) {
 					break;
 				}
-				
+
 			}
 			setsid();
 
 			/* Don't let shell process inherit slavefd */
 			fcntl (curconn->slavefd, F_SETFD, FD_CLOEXEC);
 			close(curconn->ptsfd);
-			
+
 			/* Redirect STDIN/STDIO/STDERR */
 			close(0);
 			dup(curconn->slavefd);
@@ -629,7 +599,7 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 
 		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_TERM_WIDTH) {
 			unsigned short width;
-			
+
 			memcpy(&width, cpkt.data, 2);
 			curconn->terminal_width = le16toh(width);
 			got_width_packet = 1;
@@ -679,11 +649,11 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		/* Parse next control packet */
 		success = parse_control_packet(NULL, 0, &cpkt);
 	}
-	
+
 	if (!tunnel_conn && got_user_packet && got_pass_packet) {
 		user_login(curconn, pkthdr);
 	}
-	
+
 	if (tunnel_conn && got_auth_packet) {
 		setup_tunnel(curconn, pkthdr);
 	}
@@ -826,7 +796,7 @@ static void daemonize() {
 	close(0);
 	close(1);
 	close(2);
-	
+
 	fd = open("/dev/null",O_RDWR);
 	dup(fd);
 	dup(fd);
@@ -899,7 +869,7 @@ void sigterm_handler() {
 
 	syslog(LOG_NOTICE, _("Daemon shutting down"));
 
-	for (p = connections_head; p != NULL; p = p->next) {
+	list_for_each_entry(p, &connections, list) {
 		if (p->state == STATE_ACTIVE) {
 			init_packet(&pdata, MT_PTYPE_DATA, p->interface->mac_addr, p->srcmac, p->seskey, p->outcounter);
 			add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, _(message), strlen(_(message)));
@@ -926,7 +896,7 @@ void sigterm_handler() {
 
 void sighup_handler() {
 	int i;
-	struct mt_connection *p;
+	struct mt_connection *p, *tmp;
 
 	syslog(LOG_NOTICE, _("SIGHUP: Reloading interfaces"));
 
@@ -946,17 +916,14 @@ void sighup_handler() {
 	setup_sockets();
 
 	/* Reassign outgoing interfaces to connections again, since they may have changed */
-	for (p = connections_head; p != NULL; p = p->next) {
+	list_for_each_entry_safe(p, tmp, &connections, list) {
 		if (p->interface_name != NULL) {
 			struct net_interface *interface = net_get_interface_ptr(interfaces, MAX_INTERFACES, p->interface_name, 0);
 			if (interface != NULL) {
 				p->interface = interface;
 			} else {
-				struct mt_connection tmp;
 				syslog(LOG_NOTICE, _("(%d) Connection closed because interface %s is gone."), p->seskey, p->interface_name);
-				tmp.next = p->next;
 				list_remove_connection(p);
-				p = &tmp;
 			}
 		}
 	}
@@ -971,6 +938,7 @@ int main (int argc, char **argv) {
 	struct sockaddr_in si_me_mndp;
 	struct timeval timeout;
 	struct mt_packet pdata;
+	struct mt_connection *p, *tmp;
 	fd_set read_fds;
 	int c,optval = 1;
 	int print_help = 0;
@@ -1148,7 +1116,7 @@ int main (int argc, char **argv) {
 			interface_count++;
 		}
 	}
-	
+
 	if (interface_count == 0) {
 		syslog(LOG_ERR, _("Unable to find any valid network interfaces\n"));
 		exit(1);
@@ -1156,7 +1124,6 @@ int main (int argc, char **argv) {
 
 	while (1) {
 		int reads;
-		struct mt_connection *p;
 		int maxfd=0;
 		time_t now;
 
@@ -1167,7 +1134,7 @@ int main (int argc, char **argv) {
 		maxfd = insockfd > mndpsockfd ? insockfd : mndpsockfd;
 
 		/* Add active connections to select queue */
-		for (p = connections_head; p != NULL; p = p->next) {
+		list_for_each_entry(p, &connections, list) {
 			if (!tunnel_conn && p->state == STATE_ACTIVE && p->wait_for_ack == 0 && p->ptsfd > 0) {
 				FD_SET(p->ptsfd, &read_fds);
 				if (p->ptsfd > maxfd) {
@@ -1211,7 +1178,7 @@ int main (int argc, char **argv) {
 				}
 			}
 			/* Handle data from terminal sessions or tunnels. */
-			for (p = connections_head; p != NULL; p = p->next) {
+			list_for_each_entry_safe(p, tmp, &connections, list) {
 				/* Check if we have data ready in the pty / tunnel buffer for the active session */
 				if ((p->state == STATE_ACTIVE && p->wait_for_ack == 0) &&
 						((!tunnel_conn && p->ptsfd > 0 && FD_ISSET(p->ptsfd, &read_fds))
@@ -1234,7 +1201,6 @@ int main (int argc, char **argv) {
 						result = send_udp(p, &pdata);
 					} else {
 						/* Shell exited */
-						struct mt_connection tmp;
 						init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
 						send_udp(p, &pdata);
 						if (tunnel_conn) {
@@ -1245,9 +1211,7 @@ int main (int argc, char **argv) {
 						} else {
 							syslog(LOG_INFO, _("(%d) Connection closed."), p->seskey);
 						}
-						tmp.next = p->next;
 						list_remove_connection(p);
-						p = &tmp;
 					}
 				}
 				else if (!tunnel_conn && p->state == STATE_ACTIVE && p->ptsfd > 0 && p->wait_for_ack == 1 && FD_ISSET(p->ptsfd, &read_fds)) {
@@ -1257,28 +1221,24 @@ int main (int argc, char **argv) {
 		/* Handle select() timeout */
 		}
 		time(&now);
-		
+
 		if (now - last_mndp_time > MT_MNDP_BROADCAST_INTERVAL) {
 			pings = 0;
 			mndp_broadcast();
 			last_mndp_time = now;
 		}
-		if (connections_head != NULL) {
-			struct mt_connection *p,tmp;
-			for (p = connections_head; p != NULL; p = p->next) {
-				if (now - p->lastdata >= MT_CONNECTION_TIMEOUT) {
-					syslog(LOG_INFO, _("(%d) Session timed out"), p->seskey);
-					init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-					/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
-					add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, _("Timeout\r\n"), 9);
-					send_udp(p, &pdata);
-					init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-					send_udp(p, &pdata);
 
-					tmp.next = p->next;
-					list_remove_connection(p);
-					p = &tmp;
-				}
+		list_for_each_entry_safe(p, tmp, &connections, list) {
+			if (now - p->lastdata >= MT_CONNECTION_TIMEOUT) {
+				syslog(LOG_INFO, _("(%d) Session timed out"), p->seskey);
+				init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+				/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
+				add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, _("Timeout\r\n"), 9);
+				send_udp(p, &pdata);
+				init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+				send_udp(p, &pdata);
+
+				list_remove_connection(p);
 			}
 		}
 	}
