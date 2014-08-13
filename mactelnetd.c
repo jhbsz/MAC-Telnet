@@ -55,6 +55,7 @@
 #include <sys/utsname.h>
 
 #include <libubox/list.h>
+#include <libubox/uloop.h>
 
 #include "md5.h"
 #include "protocol.h"
@@ -115,13 +116,10 @@ struct mt_connection {
 	unsigned short seskey;
 	unsigned int incounter;
 	unsigned int outcounter;
-	time_t lastdata;
 
 	int terminal_mode;
 	enum mt_connection_state state;
-	int ptsfd;
 	int slavefd;
-	int fwdfd;
 	int pid;
 	int wait_for_ack;
 	int have_enckey;
@@ -138,6 +136,11 @@ struct mt_connection {
 	char terminal_type[30];
 
 	struct list_head list;
+
+	struct uloop_process terminal;
+	struct uloop_timeout timeout;
+	struct uloop_fd ptsfd;
+	struct uloop_fd fwdfd;
 };
 
 static void uwtmp_login(struct mt_connection *);
@@ -150,14 +153,19 @@ static void list_add_connection(struct mt_connection *conn) {
 }
 
 static void list_remove_connection(struct mt_connection *conn) {
-	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->ptsfd > 0) {
-		close(conn->ptsfd);
+	uloop_fd_delete(&conn->ptsfd);
+	uloop_fd_delete(&conn->fwdfd);
+	uloop_timeout_cancel(&conn->timeout);
+	uloop_process_delete(&conn->terminal);
+
+	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->ptsfd.fd > 0) {
+		close(conn->ptsfd.fd);
 	}
 	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->slavefd > 0) {
 		close(conn->slavefd);
 	}
-	if (tunnel_conn && conn->state == STATE_ACTIVE && conn->fwdfd > 0) {
-			close(conn->fwdfd);
+	if (tunnel_conn && conn->state == STATE_ACTIVE && conn->fwdfd.fd > 0) {
+		close(conn->fwdfd.fd);
 	}
 
 	if (!tunnel_conn) {
@@ -165,6 +173,7 @@ static void list_remove_connection(struct mt_connection *conn) {
 	}
 
 	list_del(&conn->list);
+
 	free(conn);
 }
 
@@ -178,16 +187,11 @@ static struct mt_connection *list_find_connection(unsigned short seskey, unsigne
 	return NULL;
 }
 
-static struct mt_connection *list_find_connection_by_fd(int fd) {
-	struct mt_connection *p;
-
-	list_for_each_entry(p, &connections, list)
-		if (tunnel_conn && p->fwdfd == fd)
-			return p;
-		else if (!tunnel_conn && p->ptsfd == fd)
-			return p;
-
-	return NULL;
+static struct mt_connection *list_find_connection_by_fd(struct uloop_fd *ufd) {
+	if (tunnel_conn)
+		return container_of(ufd, struct mt_connection, fwdfd);
+	else
+		return container_of(ufd, struct mt_connection, ptsfd);
 }
 
 static int find_socket(unsigned char *mac) {
@@ -368,6 +372,12 @@ static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_
 	send_udp(curconn, &pdata);
 }
 
+static void terminal_closed(struct uloop_process *uproc)
+{
+	struct mt_connection *p = container_of(uproc, struct mt_connection, terminal);
+	list_remove_connection(p);
+}
+
 static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	struct mt_packet pdata;
 	unsigned char md5sum[17];
@@ -417,8 +427,8 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	curconn->terminal_mode = 1;
 
 	/* Open pts handle */
-	curconn->ptsfd = posix_openpt(O_RDWR);
-	if (curconn->ptsfd == -1 || grantpt(curconn->ptsfd) == -1 || unlockpt(curconn->ptsfd) == -1) {
+	curconn->ptsfd.fd = posix_openpt(O_RDWR);
+	if (curconn->ptsfd.fd == -1 || grantpt(curconn->ptsfd.fd) == -1 || unlockpt(curconn->ptsfd.fd) == -1) {
 			syslog(LOG_ERR, "posix_openpt: %s", strerror(errno));
 			/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
 			abort_connection(curconn, pkthdr, _("Terminal error\r\n"));
@@ -426,7 +436,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	}
 
 	/* Get file path for our pts */
-	slavename = ptsname(curconn->ptsfd);
+	slavename = ptsname(curconn->ptsfd.fd);
 	if (slavename != NULL) {
 		pid_t pid;
 		struct stat sb;
@@ -478,7 +488,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 
 			/* Don't let shell process inherit slavefd */
 			fcntl (curconn->slavefd, F_SETFD, FD_CLOEXEC);
-			close(curconn->ptsfd);
+			close(curconn->ptsfd.fd);
 
 			/* Redirect STDIN/STDIO/STDERR */
 			close(0);
@@ -520,11 +530,17 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 			execl(user->pw_shell, "-", (char *) 0);
 			exit(0); // just to be sure.
 		}
+
+		curconn->terminal.cb = terminal_closed;
+		curconn->terminal.pid = pid;
+		uloop_process_add(&curconn->terminal);
+
 		close(curconn->slavefd);
 		curconn->pid = pid;
-		set_terminal_size(curconn->ptsfd, curconn->terminal_width, curconn->terminal_height);
+		set_terminal_size(curconn->ptsfd.fd, curconn->terminal_width, curconn->terminal_height);
 	}
 
+	uloop_fd_add(&curconn->ptsfd, ULOOP_READ);
 }
 
 static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
@@ -539,14 +555,14 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	}
 
 	/* Setup socket for connecting tunnel to server port. */
-	curconn->fwdfd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (curconn->fwdfd < 0) {
+	curconn->fwdfd.fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (curconn->fwdfd.fd < 0) {
 		syslog(LOG_ERR, "Socket creation error: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Socket error.\r\n"));
 		return;
 	}
 	int optval = 1;
-	if(setsockopt(curconn->fwdfd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
+	if(setsockopt(curconn->fwdfd.fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
 		syslog(LOG_ERR, "Error in setting SO_KEEPALIVE option for socket: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Socket error.\r\n"));
 		return;
@@ -558,7 +574,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	socket_address.sin_family = AF_INET;
 	socket_address.sin_port = htons(fwdport);
 	socket_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-	if (connect(curconn->fwdfd, (struct sockaddr *) &socket_address, sizeof(socket_address)) < 0) {
+	if (connect(curconn->fwdfd.fd, (struct sockaddr *) &socket_address, sizeof(socket_address)) < 0) {
 		syslog(LOG_ERR, "Error in connection of tunnel to server port: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Error in connection of tunnel to server.\r\n"));
 		return;
@@ -566,6 +582,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 
 	/* User is logged in */
 	curconn->state = STATE_ACTIVE;
+	uloop_fd_add(&curconn->fwdfd, ULOOP_READ);
 }
 
 static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, int data_len) {
@@ -644,11 +661,11 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		} else if (cpkt.cptype == MT_CPTYPE_PLAINDATA) {
 
 			/* relay data from client to shell */
-			if (!tunnel_conn && curconn->state == STATE_ACTIVE && curconn->ptsfd != -1) {
-				write(curconn->ptsfd, cpkt.data, cpkt.length);
+			if (!tunnel_conn && curconn->state == STATE_ACTIVE && curconn->ptsfd.fd != -1) {
+				write(curconn->ptsfd.fd, cpkt.data, cpkt.length);
 			}
-			if (tunnel_conn && curconn->state == STATE_ACTIVE && curconn->fwdfd != -1) {
-				if (send(curconn->fwdfd, cpkt.data, cpkt.length, 0) <= 0) {
+			if (tunnel_conn && curconn->state == STATE_ACTIVE && curconn->fwdfd.fd != -1) {
+				if (send(curconn->fwdfd.fd, cpkt.data, cpkt.length, 0) <= 0) {
 					syslog(LOG_INFO, "(%d) Connection from tunnel to server port closed.", curconn->seskey);
 					abort_connection(curconn, pkthdr, _("Server port disconnection.\r\n"));
 					return;
@@ -671,10 +688,13 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 	}
 
 	if (!tunnel_conn && curconn->state == STATE_ACTIVE && (got_width_packet || got_height_packet)) {
-		set_terminal_size(curconn->ptsfd, curconn->terminal_width, curconn->terminal_height);
+		set_terminal_size(curconn->ptsfd.fd, curconn->terminal_width, curconn->terminal_height);
 
 	}
 }
+
+static void recv_bulk(struct uloop_fd *ufd, unsigned int ev);
+static void timeout_session(struct uloop_timeout *utm);
 
 static void handle_packet(unsigned char *data, int data_len, const struct sockaddr_in *address) {
 	struct mt_mactelnet_hdr pkthdr;
@@ -708,7 +728,6 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			syslog(LOG_DEBUG, _("(%d) New connection from %s."), pkthdr.seskey, ether_ntoa((struct ether_addr*)&(pkthdr.srcaddr)));
 			curconn = calloc(1, sizeof(struct mt_connection));
 			curconn->seskey = pkthdr.seskey;
-			curconn->lastdata = time(NULL);
 			curconn->state = STATE_AUTH;
 			curconn->interface = &interfaces[interface_index];
 			strncpy(curconn->interface_name, interfaces[interface_index].name, 254);
@@ -718,7 +737,12 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			curconn->srcport = htons(address->sin_port);
 			memcpy(curconn->dstmac, pkthdr.dstaddr, ETH_ALEN);
 
+			curconn->fwdfd.cb = recv_bulk;
+			curconn->ptsfd.cb = recv_bulk;
+			curconn->timeout.cb = timeout_session;
+
 			list_add_connection(curconn);
+			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
 			send_udp(curconn, &pdata);
@@ -747,12 +771,13 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 				curconn->wait_for_ack = 0;
 			}
 
-			if (time(0) - curconn->lastdata > 9) {
+			if (uloop_timeout_remaining(&curconn->timeout) > 9000) {
 				// Answer to anti-timeout packet
 				init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
 				send_udp(curconn, &pdata);
 			}
-			curconn->lastdata = time(NULL);
+
+			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 			return;
 
 		case MT_PTYPE_DATA:
@@ -760,7 +785,7 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			if (curconn == NULL) {
 				break;
 			}
-			curconn->lastdata = time(NULL);
+			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			/* ack the data packet */
 			init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter + (data_len - MT_HEADER_LEN));
@@ -818,7 +843,7 @@ static void print_version() {
 	fprintf(stderr, PROGRAM_NAME " " PROGRAM_VERSION "\n");
 }
 
-void mndp_broadcast() {
+void mndp_broadcast(struct uloop_timeout *utm) {
 	struct mt_packet pdata;
 	struct utsname s_uname;
 	int i;
@@ -871,6 +896,9 @@ void mndp_broadcast() {
 		header->cksum = in_cksum((unsigned short *)&(pdata.data), pdata.size);
 		send_special_udp(interface, MT_MNDP_PORT, &pdata);
 	}
+
+	if (utm)
+		uloop_timeout_set(utm, MT_MNDP_BROADCAST_INTERVAL * 1000);
 }
 
 void sigterm_handler() {
@@ -941,57 +969,53 @@ void sighup_handler() {
 	}
 }
 
-static void recv_telnet(int fd)
+static void recv_telnet(struct uloop_fd *ufd, unsigned int ev)
 {
 	int result;
 	unsigned char buff[1500];
 	struct sockaddr_in saddress;
 	unsigned int slen = sizeof(saddress);
-	result = recvfrom(fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+	result = recvfrom(ufd->fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
 	handle_packet(buff, result, &saddress);
 }
 
-static void recv_mndp(int fd)
+static void recv_mndp(struct uloop_fd *ufd, unsigned int ev)
 {
 	int result;
 	unsigned char buff[1500];
 	struct sockaddr_in saddress;
 	unsigned int slen = sizeof(saddress);
-	result = recvfrom(fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+	result = recvfrom(ufd->fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
 
 	/* Handle MNDP broadcast request, max 1 rps */
 	if (result == 4 && time(NULL) - last_mndp_time > 0) {
-		mndp_broadcast();
+		mndp_broadcast(NULL);
 		time(&last_mndp_time);
 	}
 }
 
-static void recv_bulk(int fd)
+static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)
 {
-	int result;
 	struct mt_connection *p;
 	struct mt_packet pdata;
 	unsigned char keydata[1024];
 	int datalen,plen;
 
-	p = list_find_connection_by_fd(fd);
+	p = list_find_connection_by_fd(ufd);
 
 	if (!p)
 		return;
 
 	/* Read it */
-	if (!tunnel_conn) {
-		datalen = read(p->ptsfd, &keydata, 1024);
-	} else {
-		datalen = read(p->fwdfd, &keydata, 1024);
-	}
+	datalen = read(ufd->fd, &keydata, 1024);
+
 	if (datalen > 0) {
 		/* Send it */
 		init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
 		plen = add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, &keydata, datalen);
 		p->outcounter += plen;
 		p->wait_for_ack = 1;
-		result = send_udp(p, &pdata);
+		send_udp(p, &pdata);
 	} else {
 		/* Shell exited */
 		init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
@@ -1008,6 +1032,22 @@ static void recv_bulk(int fd)
 	}
 }
 
+static void timeout_session(struct uloop_timeout *utm)
+{
+	struct mt_packet pdata;
+	struct mt_connection *p = container_of(utm, struct mt_connection, timeout);
+
+	syslog(LOG_INFO, _("(%d) Session timed out"), p->seskey);
+	init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+	/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
+	add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, _("Timeout\r\n"), 9);
+	send_udp(p, &pdata);
+	init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+	send_udp(p, &pdata);
+
+	list_remove_connection(p);
+}
+
 /*
  * TODO: Rewrite main() when all sub-functionality is tested
  */
@@ -1015,10 +1055,6 @@ int main (int argc, char **argv) {
 	int i;
 	struct sockaddr_in si_me;
 	struct sockaddr_in si_me_mndp;
-	struct timeval timeout;
-	struct mt_packet pdata;
-	struct mt_connection *p, *tmp;
-	fd_set read_fds;
 	int c,optval = 1;
 	int print_help = 0;
 	int foreground = 0;
@@ -1201,87 +1237,24 @@ int main (int argc, char **argv) {
 		exit(1);
 	}
 
-	while (1) {
-		int reads;
-		int maxfd=0;
-		time_t now;
+	struct uloop_fd insock = { }, mndpsock = { };
 
-		/* Init select */
-		FD_ZERO(&read_fds);
-		FD_SET(insockfd, &read_fds);
-		FD_SET(mndpsockfd, &read_fds);
-		maxfd = insockfd > mndpsockfd ? insockfd : mndpsockfd;
+	uloop_init();
 
-		/* Add active connections to select queue */
-		list_for_each_entry(p, &connections, list) {
-			if (!tunnel_conn && p->state == STATE_ACTIVE && p->wait_for_ack == 0 && p->ptsfd > 0) {
-				FD_SET(p->ptsfd, &read_fds);
-				if (p->ptsfd > maxfd) {
-					maxfd = p->ptsfd;
-				}
-			}
-			else if (tunnel_conn && p->state == STATE_ACTIVE && p->wait_for_ack == 0 && p->fwdfd > 0) {
-				FD_SET(p->fwdfd, &read_fds);
-				if (p->fwdfd > maxfd) {
-					maxfd = p->fwdfd;
-				}
-			}
-		}
+	insock.fd = insockfd;
+	insock.cb = recv_telnet;
+	uloop_fd_add(&insock, ULOOP_READ);
 
-		timeout.tv_sec = 1;
-		timeout.tv_usec = 0;
+	mndpsock.fd = mndpsockfd;
+	mndpsock.cb = recv_mndp;
+	uloop_fd_add(&mndpsock, ULOOP_READ);
 
-		/* Wait for data or timeout */
-		reads = select(maxfd+1, &read_fds, NULL, NULL, &timeout);
-		if (reads > 0) {
-			/* Handle data from clients
-			 TODO: Enable broadcast support (without raw sockets)
-			 */
-			if (FD_ISSET(insockfd, &read_fds))
-				recv_telnet(insockfd);
+	struct uloop_timeout mndpintv = { };
 
-			if (FD_ISSET(mndpsockfd, &read_fds))
-				recv_mndp(mndpsockfd);
+	mndpintv.cb = mndp_broadcast;
+	mndp_broadcast(&mndpintv);
 
-			/* Handle data from terminal sessions or tunnels. */
-			list_for_each_entry_safe(p, tmp, &connections, list) {
-				/* Check if we have data ready in the pty / tunnel buffer for the active session */
-				if ((p->state == STATE_ACTIVE && p->wait_for_ack == 0) &&
-						((!tunnel_conn && p->ptsfd > 0 && FD_ISSET(p->ptsfd, &read_fds))
-						|| (tunnel_conn && p->fwdfd > 0 && FD_ISSET(p->fwdfd, &read_fds)))) {
-					if (!tunnel_conn)
-						recv_bulk(p->ptsfd);
-					else
-						recv_bulk(p->fwdfd);
-				}
-				else if (!tunnel_conn && p->state == STATE_ACTIVE && p->ptsfd > 0 && p->wait_for_ack == 1 && FD_ISSET(p->ptsfd, &read_fds)) {
-					printf(_("(%d) Waiting for ack\n"), p->seskey);
-				}
-			}
-		/* Handle select() timeout */
-		}
-		time(&now);
-
-		if (now - last_mndp_time > MT_MNDP_BROADCAST_INTERVAL) {
-			pings = 0;
-			mndp_broadcast();
-			last_mndp_time = now;
-		}
-
-		list_for_each_entry_safe(p, tmp, &connections, list) {
-			if (now - p->lastdata >= MT_CONNECTION_TIMEOUT) {
-				syslog(LOG_INFO, _("(%d) Session timed out"), p->seskey);
-				init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-				/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
-				add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, _("Timeout\r\n"), 9);
-				send_udp(p, &pdata);
-				init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
-				send_udp(p, &pdata);
-
-				list_remove_connection(p);
-			}
-		}
-	}
+	uloop_run();
 
 	/* Never reached */
 	return 0;

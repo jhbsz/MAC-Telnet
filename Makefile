@@ -44,7 +44,7 @@ pot: po/mactelnet.pot
 
 po/mactelnet.pot: *.c
 	xgettext --package-name=mactelnet --msgid-bugs-address=haakon.nessjoen@gmail.com -d mactelnet -C -c_ -k_ -kgettext_noop *.c -o po/mactelnet.pot
-	
+
 users.o: users.c users.h
 	${CC} -Wall ${CFLAGS} -DUSERSFILE='"/etc/mactelnetd.users"' -c users.c
 
@@ -61,7 +61,7 @@ mactelnet: config.h mactelnet.c mactelnet.h protocol.o console.c console.h inter
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mactelnet mactelnet.c protocol.o console.c interfaces.o users.o md5.o -DFROM_MACTELNET mndp.c ${LIBS}
 
 mactelnetd: config.h mactelnetd.c protocol.o interfaces.o console.c console.h users.o users.h md5.o
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o md5.o ${LIBS}
+	${CC} -Wall ${CFLAGS} ${LDFLAGS} -lubox -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o md5.o ${LIBS}
 
 mndp: config.h mndp.c protocol.o
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o ${LIBS}
