@@ -139,8 +139,7 @@ struct mt_connection {
 
 	struct uloop_process terminal;
 	struct uloop_timeout timeout;
-	struct uloop_fd ptsfd;
-	struct uloop_fd fwdfd;
+	struct uloop_fd socket;
 };
 
 static void uwtmp_login(struct mt_connection *);
@@ -153,19 +152,15 @@ static void list_add_connection(struct mt_connection *conn) {
 }
 
 static void list_remove_connection(struct mt_connection *conn) {
-	uloop_fd_delete(&conn->ptsfd);
-	uloop_fd_delete(&conn->fwdfd);
+	uloop_fd_delete(&conn->socket);
 	uloop_timeout_cancel(&conn->timeout);
 	uloop_process_delete(&conn->terminal);
 
-	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->ptsfd.fd > 0) {
-		close(conn->ptsfd.fd);
+	if ( conn->state == STATE_ACTIVE && conn->socket.fd > 0) {
+		close(conn->socket.fd);
 	}
 	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->slavefd > 0) {
 		close(conn->slavefd);
-	}
-	if (tunnel_conn && conn->state == STATE_ACTIVE && conn->fwdfd.fd > 0) {
-		close(conn->fwdfd.fd);
 	}
 
 	if (!tunnel_conn) {
@@ -185,13 +180,6 @@ static struct mt_connection *list_find_connection(unsigned short seskey, unsigne
 			return p;
 
 	return NULL;
-}
-
-static struct mt_connection *list_find_connection_by_fd(struct uloop_fd *ufd) {
-	if (tunnel_conn)
-		return container_of(ufd, struct mt_connection, fwdfd);
-	else
-		return container_of(ufd, struct mt_connection, ptsfd);
 }
 
 static int find_socket(unsigned char *mac) {
@@ -427,8 +415,8 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	curconn->terminal_mode = 1;
 
 	/* Open pts handle */
-	curconn->ptsfd.fd = posix_openpt(O_RDWR);
-	if (curconn->ptsfd.fd == -1 || grantpt(curconn->ptsfd.fd) == -1 || unlockpt(curconn->ptsfd.fd) == -1) {
+	curconn->socket.fd = posix_openpt(O_RDWR);
+	if (curconn->socket.fd == -1 || grantpt(curconn->socket.fd) == -1 || unlockpt(curconn->socket.fd) == -1) {
 			syslog(LOG_ERR, "posix_openpt: %s", strerror(errno));
 			/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
 			abort_connection(curconn, pkthdr, _("Terminal error\r\n"));
@@ -436,7 +424,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	}
 
 	/* Get file path for our pts */
-	slavename = ptsname(curconn->ptsfd.fd);
+	slavename = ptsname(curconn->socket.fd);
 	if (slavename != NULL) {
 		pid_t pid;
 		struct stat sb;
@@ -488,7 +476,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 
 			/* Don't let shell process inherit slavefd */
 			fcntl (curconn->slavefd, F_SETFD, FD_CLOEXEC);
-			close(curconn->ptsfd.fd);
+			close(curconn->socket.fd);
 
 			/* Redirect STDIN/STDIO/STDERR */
 			close(0);
@@ -537,10 +525,10 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 
 		close(curconn->slavefd);
 		curconn->pid = pid;
-		set_terminal_size(curconn->ptsfd.fd, curconn->terminal_width, curconn->terminal_height);
+		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
 	}
 
-	uloop_fd_add(&curconn->ptsfd, ULOOP_READ);
+	uloop_fd_add(&curconn->socket, ULOOP_READ);
 }
 
 static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
@@ -555,14 +543,14 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	}
 
 	/* Setup socket for connecting tunnel to server port. */
-	curconn->fwdfd.fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (curconn->fwdfd.fd < 0) {
+	curconn->socket.fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (curconn->socket.fd < 0) {
 		syslog(LOG_ERR, "Socket creation error: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Socket error.\r\n"));
 		return;
 	}
 	int optval = 1;
-	if(setsockopt(curconn->fwdfd.fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
+	if(setsockopt(curconn->socket.fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
 		syslog(LOG_ERR, "Error in setting SO_KEEPALIVE option for socket: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Socket error.\r\n"));
 		return;
@@ -574,7 +562,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	socket_address.sin_family = AF_INET;
 	socket_address.sin_port = htons(fwdport);
 	socket_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-	if (connect(curconn->fwdfd.fd, (struct sockaddr *) &socket_address, sizeof(socket_address)) < 0) {
+	if (connect(curconn->socket.fd, (struct sockaddr *) &socket_address, sizeof(socket_address)) < 0) {
 		syslog(LOG_ERR, "Error in connection of tunnel to server port: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, _("Error in connection of tunnel to server.\r\n"));
 		return;
@@ -582,7 +570,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 
 	/* User is logged in */
 	curconn->state = STATE_ACTIVE;
-	uloop_fd_add(&curconn->fwdfd, ULOOP_READ);
+	uloop_fd_add(&curconn->socket, ULOOP_READ);
 }
 
 static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, int data_len) {
@@ -661,11 +649,10 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		} else if (cpkt.cptype == MT_CPTYPE_PLAINDATA) {
 
 			/* relay data from client to shell */
-			if (!tunnel_conn && curconn->state == STATE_ACTIVE && curconn->ptsfd.fd != -1) {
-				write(curconn->ptsfd.fd, cpkt.data, cpkt.length);
-			}
-			if (tunnel_conn && curconn->state == STATE_ACTIVE && curconn->fwdfd.fd != -1) {
-				if (send(curconn->fwdfd.fd, cpkt.data, cpkt.length, 0) <= 0) {
+			if (curconn->state == STATE_ACTIVE && curconn->socket.fd != -1) {
+				if (!tunnel_conn)
+					write(curconn->socket.fd, cpkt.data, cpkt.length);
+				else if (send(curconn->socket.fd, cpkt.data, cpkt.length, 0) <= 0) {
 					syslog(LOG_INFO, "(%d) Connection from tunnel to server port closed.", curconn->seskey);
 					abort_connection(curconn, pkthdr, _("Server port disconnection.\r\n"));
 					return;
@@ -688,7 +675,7 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 	}
 
 	if (!tunnel_conn && curconn->state == STATE_ACTIVE && (got_width_packet || got_height_packet)) {
-		set_terminal_size(curconn->ptsfd.fd, curconn->terminal_width, curconn->terminal_height);
+		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
 
 	}
 }
@@ -737,8 +724,7 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			curconn->srcport = htons(address->sin_port);
 			memcpy(curconn->dstmac, pkthdr.dstaddr, ETH_ALEN);
 
-			curconn->fwdfd.cb = recv_bulk;
-			curconn->ptsfd.cb = recv_bulk;
+			curconn->socket.cb = recv_bulk;
 			curconn->timeout.cb = timeout_session;
 
 			list_add_connection(curconn);
@@ -996,15 +982,10 @@ static void recv_mndp(struct uloop_fd *ufd, unsigned int ev)
 
 static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)
 {
-	struct mt_connection *p;
+	struct mt_connection *p = container_of(ufd, struct mt_connection, socket);
 	struct mt_packet pdata;
 	unsigned char keydata[1024];
 	int datalen,plen;
-
-	p = list_find_connection_by_fd(ufd);
-
-	if (!p)
-		return;
 
 	/* Read it */
 	datalen = read(ufd->fd, &keydata, 1024);
