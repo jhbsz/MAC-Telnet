@@ -573,92 +573,99 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	uloop_fd_add(&curconn->socket, ULOOP_READ);
 }
 
+static void send_challange(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
+	int i;
+	struct mt_packet pdata;
+
+	if (!curconn->have_enckey)
+	{
+		for (i = 0; i < 16; ++i)
+			curconn->enckey[i] = rand() % 256;
+
+		curconn->have_enckey = 1;
+		memset(curconn->trypassword, 0, sizeof(curconn->trypassword));
+	}
+
+	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+	curconn->outcounter += add_control_packet(&pdata, MT_CPTYPE_ENCRYPTIONKEY, (curconn->enckey), 16);
+
+	send_udp(curconn, &pdata);
+}
+
 static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, int data_len) {
 	struct mt_mactelnet_control_hdr cpkt;
-	struct mt_packet pdata;
 	unsigned char *data = pkthdr->data;
-	int got_auth_packet = 0;
 	int got_user_packet = 0;
 	int got_pass_packet = 0;
-	int got_width_packet = 0;
-	int got_height_packet = 0;
+	int got_size_packet = 0;
 	int success;
+	unsigned short width;
+	unsigned short height;
 
 	/* Parse first control packet */
 	success = parse_control_packet(data, data_len - MT_HEADER_LEN, &cpkt);
 
-	while (success) {
-		if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_BEGINAUTH) {
-			int plen,i;
-			if (!curconn->have_enckey) {
-				for (i = 0; i < 16; ++i) {
-					curconn->enckey[i] = rand() % 256;
-				}
-				curconn->have_enckey = 1;
+	while (success)
+	{
+		switch (cpkt.cptype)
+		{
+		case MT_CPTYPE_BEGINAUTH:
+			if (tunnel_conn)
+				setup_tunnel(curconn, pkthdr);
+			else
+				send_challange(curconn, pkthdr);
+			break;
 
-				memset(curconn->trypassword, 0, sizeof(curconn->trypassword));
-			}
-			init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
-			plen = add_control_packet(&pdata, MT_CPTYPE_ENCRYPTIONKEY, (curconn->enckey), 16);
-			curconn->outcounter += plen;
+		case MT_CPTYPE_TERM_WIDTH:
+			if (tunnel_conn)
+				goto require_ssh;
+			memcpy(&width, cpkt.data, 2);
+			curconn->terminal_width = le16toh(width);
+			got_size_packet = (curconn->state == STATE_ACTIVE);
+			break;
 
-			send_udp(curconn, &pdata);
-			got_auth_packet = 1;
-		}
-		else if (tunnel_conn && cpkt.cptype == MT_CPTYPE_BEGINAUTH) {
-			got_auth_packet = 1;
+		case MT_CPTYPE_TERM_HEIGHT:
+			if (tunnel_conn)
+				goto require_ssh;
+			memcpy(&height, cpkt.data, 2);
+			curconn->terminal_height = le16toh(height);
+			got_size_packet = (curconn->state == STATE_ACTIVE);
+			break;
 
-		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_USERNAME) {
+		case MT_CPTYPE_TERM_TYPE:
+			if (tunnel_conn)
+				goto require_ssh;
+			memcpy(curconn->terminal_type, cpkt.data, cpkt.length > 29 ? 29 : cpkt.length);
+			curconn->terminal_type[cpkt.length > 29 ? 29 : cpkt.length] = 0;
+			break;
 
+		case MT_CPTYPE_USERNAME:
+			if (tunnel_conn)
+				goto require_ssh;
 			memcpy(curconn->username, cpkt.data, cpkt.length > 29 ? 29 : cpkt.length);
 			curconn->username[cpkt.length > 29 ? 29 : cpkt.length] = 0;
 			got_user_packet = 1;
+			break;
 
-		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_TERM_WIDTH) {
-			unsigned short width;
-
-			memcpy(&width, cpkt.data, 2);
-			curconn->terminal_width = le16toh(width);
-			got_width_packet = 1;
-
-		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_TERM_HEIGHT) {
-			unsigned short height;
-
-			memcpy(&height, cpkt.data, 2);
-			curconn->terminal_height = le16toh(height);
-			got_height_packet = 1;
-
-		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_TERM_TYPE) {
-
-			memcpy(curconn->terminal_type, cpkt.data, cpkt.length > 29 ? 29 : cpkt.length);
-			curconn->terminal_type[cpkt.length > 29 ? 29 : cpkt.length] = 0;
-
-		} else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_PASSWORD) {
-
+		case MT_CPTYPE_PASSWORD:
+			if (tunnel_conn)
+				goto require_ssh;
 			memcpy(curconn->trypassword, cpkt.data, 17);
 			got_pass_packet = 1;
-		} else if (tunnel_conn &&
-				(cpkt.cptype == MT_CPTYPE_USERNAME
-				 || cpkt.cptype == MT_CPTYPE_PASSWORD
-				 || cpkt.cptype == MT_CPTYPE_TERM_TYPE
-				 || cpkt.cptype == MT_CPTYPE_TERM_WIDTH
-				 || cpkt.cptype == MT_CPTYPE_TERM_HEIGHT)) {
-			syslog(LOG_INFO, "(%d) Connection from tunnel to server port closed.", curconn->seskey);
-			abort_connection(curconn, pkthdr, _("The server does not support standard MAC-Telnet Protocol. Please try using MAC-SSH instead.\r\n"));
-			return;
-		} else if (cpkt.cptype == MT_CPTYPE_PLAINDATA) {
+			break;
 
-			/* relay data from client to shell */
+		case MT_CPTYPE_PLAINDATA:
+			/* relay data from client to shell/tunnel */
 			if (curconn->state == STATE_ACTIVE && curconn->socket.fd != -1) {
-				if (!tunnel_conn)
-					write(curconn->socket.fd, cpkt.data, cpkt.length);
-				else if (send(curconn->socket.fd, cpkt.data, cpkt.length, 0) <= 0) {
+				if (write(curconn->socket.fd, cpkt.data, cpkt.length) <= 0 && tunnel_conn) {
 					syslog(LOG_INFO, "(%d) Connection from tunnel to server port closed.", curconn->seskey);
 					abort_connection(curconn, pkthdr, _("Server port disconnection.\r\n"));
 					return;
 				}
 			}
-		} else {
+			break;
+
+		default:
 			syslog(LOG_WARNING, _("(%d) Unhandeled control packet type: %d"), curconn->seskey, cpkt.cptype);
 		}
 
@@ -666,18 +673,17 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		success = parse_control_packet(NULL, 0, &cpkt);
 	}
 
-	if (!tunnel_conn && got_user_packet && got_pass_packet) {
+	if (got_user_packet && got_pass_packet)
 		user_login(curconn, pkthdr);
-	}
 
-	if (tunnel_conn && got_auth_packet) {
-		setup_tunnel(curconn, pkthdr);
-	}
-
-	if (!tunnel_conn && curconn->state == STATE_ACTIVE && (got_width_packet || got_height_packet)) {
+	if (got_size_packet)
 		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
 
-	}
+	return;
+
+require_ssh:
+	syslog(LOG_INFO, "(%d) Connection from tunnel to server port closed.", curconn->seskey);
+	abort_connection(curconn, pkthdr, _("The server does not support standard MAC-Telnet Protocol. Please try using MAC-SSH instead.\r\n"));
 }
 
 static void recv_bulk(struct uloop_fd *ufd, unsigned int ev);
