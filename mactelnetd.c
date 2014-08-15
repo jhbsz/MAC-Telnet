@@ -56,8 +56,8 @@
 
 #include <libubox/list.h>
 #include <libubox/uloop.h>
+#include <libubox/md5.h>
 
-#include "md5.h"
 #include "protocol.h"
 #include "console.h"
 #include "interfaces.h"
@@ -134,6 +134,8 @@ struct mt_connection {
 	unsigned short terminal_width;
 	unsigned short terminal_height;
 	char terminal_type[30];
+
+	struct mt_mactelnet_hdr pkthdr;
 
 	struct list_head list;
 
@@ -372,21 +374,21 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	char md5data[100];
 	struct mt_credentials *user;
 	char *slavename;
+	md5_ctx_t md5;
 
 	/* Reparse user file before each login */
 	read_userfile();
 
 	if ((user = find_user(curconn->username)) != NULL) {
-		md5_state_t state;
 		/* Concat string of 0 + password + encryptionkey */
 		md5data[0] = 0;
 		strncpy(md5data + 1, user->password, 82);
 		memcpy(md5data + 1 + strlen(user->password), curconn->enckey, 16);
 
 		/* Generate md5 sum of md5data with a leading 0 */
-		md5_init(&state);
-		md5_append(&state, (const md5_byte_t *)md5data, strlen(user->password) + 17);
-		md5_finish(&state, (md5_byte_t *)md5sum + 1);
+		md5_begin(&md5);
+		md5_hash(md5data, strlen(user->password) + 17, &md5);
+		md5_end(md5sum + 1, &md5);
 		md5sum[0] = 0;
 
 		init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);

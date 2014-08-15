@@ -60,8 +60,8 @@ md5.o: md5.c md5.h
 mactelnet: config.h mactelnet.c mactelnet.h protocol.o console.c console.h interfaces.o users.o users.h md5.o mndp.c
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mactelnet mactelnet.c protocol.o console.c interfaces.o users.o md5.o -DFROM_MACTELNET mndp.c ${LIBS}
 
-mactelnetd: config.h mactelnetd.c protocol.o interfaces.o console.c console.h users.o users.h md5.o
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -lubox -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o md5.o ${LIBS}
+mactelnetd: config.h mactelnetd.c protocol.o interfaces.o console.c console.h users.o users.h
+	${CC} -Wall ${CFLAGS} ${LDFLAGS} -lubox -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o ${LIBS}
 
 mndp: config.h mndp.c protocol.o
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o ${LIBS}
