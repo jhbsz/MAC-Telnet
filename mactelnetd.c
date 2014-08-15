@@ -139,7 +139,6 @@ struct mt_connection {
 
 	struct list_head list;
 
-	struct uloop_process terminal;
 	struct uloop_timeout timeout;
 	struct uloop_fd socket;
 };
@@ -156,7 +155,6 @@ static void list_add_connection(struct mt_connection *conn) {
 static void list_remove_connection(struct mt_connection *conn) {
 	uloop_fd_delete(&conn->socket);
 	uloop_timeout_cancel(&conn->timeout);
-	uloop_process_delete(&conn->terminal);
 
 	if ( conn->state == STATE_ACTIVE && conn->socket.fd > 0) {
 		close(conn->socket.fd);
@@ -362,12 +360,6 @@ static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_
 	send_udp(curconn, &pdata);
 }
 
-static void terminal_closed(struct uloop_process *uproc)
-{
-	struct mt_connection *p = container_of(uproc, struct mt_connection, terminal);
-	list_remove_connection(p);
-}
-
 static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	struct mt_packet pdata;
 	unsigned char md5sum[17];
@@ -521,16 +513,12 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 			exit(0); // just to be sure.
 		}
 
-		curconn->terminal.cb = terminal_closed;
-		curconn->terminal.pid = pid;
-		uloop_process_add(&curconn->terminal);
-
 		close(curconn->slavefd);
 		curconn->pid = pid;
 		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
 	}
 
-	uloop_fd_add(&curconn->socket, ULOOP_READ);
+	uloop_fd_add(&curconn->socket, ULOOP_READ | ULOOP_ERROR_CB);
 }
 
 static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
