@@ -84,7 +84,6 @@ static int pings = 0;
 
 struct net_interface interfaces[MAX_INTERFACES];
 
-static int use_raw_socket = 0;
 static int tunnel_conn = 0;
 static char nonpriv_username[255];
 
@@ -209,64 +208,18 @@ static void setup_sockets() {
 			continue;
 		}
 
-		if (!use_raw_socket) {
-			interfaces[i].socketfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-			if (interfaces[i].socketfd < 0) {
-				continue;
-			}
-
-			if (setsockopt(interfaces[i].socketfd, SOL_SOCKET, SO_BROADCAST, &optval, sizeof (optval))==-1) {
-				perror("SO_BROADCAST");
-				continue;
-			}
-
-			setsockopt(interfaces[i].socketfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
-
-			/* Initialize receiving socket on the device chosen */
-			si_me.sin_family = AF_INET;
-			si_me.sin_port = htons(MT_MACTELNET_PORT);
-			memcpy(&(si_me.sin_addr.s_addr), interfaces[i].ipv4_addr, IPV4_ALEN);
-
-			if (bind(interfaces[i].socketfd, (struct sockaddr *)&si_me, sizeof(si_me))==-1) {
-				fprintf(stderr, _("Error binding to %s:%d, %s\n"), inet_ntoa(si_me.sin_addr), sourceport, strerror(errno));
-				continue;
-			}
-		}
-
 		syslog(LOG_NOTICE, _("Listening on %s for %s\n"), interfaces[i].name, ether_ntoa(mac));
 
 	}
 }
 
 static int send_udp(const struct mt_connection *conn, const struct mt_packet *packet) {
-	if (use_raw_socket) {
-		return net_send_udp(sockfd, conn->interface, conn->dstmac, conn->srcmac, &sourceip, sourceport, &destip, conn->srcport, packet->data, packet->size);
-	} else {
-		/* Init SendTo struct */
-		struct sockaddr_in socket_address;
-		socket_address.sin_family = AF_INET;
-		socket_address.sin_port = htons(conn->srcport);
-		socket_address.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-
-		return sendto(conn->interface->socketfd, packet->data, packet->size, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
-	}
+	return net_send_udp(sockfd, conn->interface, conn->dstmac, conn->srcmac, &sourceip, sourceport, &destip, conn->srcport, packet->data, packet->size);
 }
 
 static int send_special_udp(struct net_interface *interface, unsigned short port, const struct mt_packet *packet) {
-	unsigned char dstmac[ETH_ALEN];
-
-	if (use_raw_socket) {
-		memset(dstmac, 0xff, ETH_ALEN);
-		return net_send_udp(sockfd, interface, interface->mac_addr, dstmac, (const struct in_addr *)&interface->ipv4_addr, port, &destip, port, packet->data, packet->size);
-	} else {
-		/* Init SendTo struct */
-		struct sockaddr_in socket_address;
-		socket_address.sin_family = AF_INET;
-		socket_address.sin_port = htons(port);
-		socket_address.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-
-		return sendto(interface->socketfd, packet->data, packet->size, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
-	}
+	unsigned char dstmac[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+	return net_send_udp(sockfd, interface, interface->mac_addr, dstmac, (const struct in_addr *)&interface->ipv4_addr, port, &destip, port, packet->data, packet->size);
 }
 
 
@@ -905,13 +858,6 @@ void sigterm_handler() {
 	/* Doesn't hurt to tidy up */
 	close(sockfd);
 	close(insockfd);
-	if (!use_raw_socket) {
-		int i;
-		for (i = 0; i < MAX_INTERFACES; ++i) {
-			if (interfaces[i].in_use && interfaces[i].socketfd > 0)
-				close(interfaces[i].socketfd);
-		}
-	}
 	closelog();
 	exit(0);
 }
@@ -921,12 +867,6 @@ void sighup_handler() {
 	struct mt_connection *p, *tmp;
 
 	syslog(LOG_NOTICE, _("SIGHUP: Reloading interfaces"));
-
-	if (!use_raw_socket) {
-		for (i = 0; i < MAX_INTERFACES; ++i) {
-			close(interfaces[i].socketfd);
-		}
-	}
 
 	bzero(interfaces, sizeof(interfaces));
 
@@ -1049,7 +989,6 @@ int main (int argc, char **argv) {
 				break;
 
 			case 'n':
-				use_raw_socket = 1;
 				break;
 
 			case 'S':
@@ -1103,7 +1042,7 @@ int main (int argc, char **argv) {
 		return 1;
 	}
 
-	if ((!tunnel_conn || use_raw_socket) && geteuid() != 0) {
+	if (geteuid() != 0) {
 		fprintf(stderr, _("You need to have root privileges to use %s.\n"), argv[0]);
 		return 1;
 	}
@@ -1116,10 +1055,7 @@ int main (int argc, char **argv) {
 	/* Seed randomizer */
 	srand(time(NULL));
 
-	if (use_raw_socket) {
-		/* Transmit raw packets with this socket */
-		sockfd = net_init_raw_socket();
-	}
+	sockfd = net_init_raw_socket();
 
 	if (drop_priv) {
 		if (tunnel_conn) {
