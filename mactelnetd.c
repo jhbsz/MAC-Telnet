@@ -41,11 +41,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <string.h>
-#ifdef __linux__
 #include <linux/if_ether.h>
-#else
-#include <sys/time.h>
-#endif
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
@@ -783,7 +779,6 @@ void mndp_broadcast(struct uloop_timeout *utm) {
 	struct utsname s_uname;
 	int i;
 	unsigned int uptime;
-#ifdef __linux__
 	struct sysinfo s_sysinfo;
 
 	if (sysinfo(&s_sysinfo) != 0) {
@@ -792,13 +787,6 @@ void mndp_broadcast(struct uloop_timeout *utm) {
 
 	/* Seems like ping uptime is transmitted as little endian? */
 	uptime = htole32(s_sysinfo.uptime);
-#else
-	struct timespec ts;
-
-	if (clock_gettime(CLOCK_UPTIME, &ts) != -1) {
-		uptime = htole32(((unsigned int)ts.tv_sec));
-	}
-#endif
 
 	if (uname(&s_uname) != 0) {
 		return;

@@ -29,9 +29,7 @@ struct net_interface {
 	/* used by mactelnetd */
 	int socketfd;
 
-#ifdef __linux__
 	int ifindex;
-#endif
 	int has_mac;
 	int in_use;
 };
