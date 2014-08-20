@@ -19,6 +19,8 @@
 #ifndef _INTERFACES_H
 #define _INTERFACES_H 1
 
+#include <libubox/list.h>
+
 #define MAX_INTERFACES 32
 
 struct net_interface {
@@ -32,12 +34,21 @@ struct net_interface {
 	int ifindex;
 	int has_mac;
 	int in_use;
+
+	struct list_head list;
 };
 
 
-extern int net_get_interfaces(struct net_interface *interfaces, int max_devices);
-extern struct net_interface *net_get_interface_ptr(struct net_interface *interfaces, int max_devices, char *name, int create);
 extern int net_init_raw_socket();
 extern int net_send_udp(const int socket, struct net_interface *interface, const unsigned char *sourcemac, const unsigned char *destmac, const struct in_addr *sourceip, const int sourceport, const struct in_addr *destip, const int destport, const unsigned char *data, const int datalen);
 extern unsigned short in_cksum(unsigned short *addr, int len);
+
+extern struct list_head ifaces;
+
+void net_ifaces_init(void);
+struct net_interface *net_ifaces_add(const char *ifname);
+struct net_interface *net_ifaces_lookup(const unsigned char *mac);
+void net_ifaces_finish(void);
+void net_ifaces_all(void);
+
 #endif

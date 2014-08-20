@@ -73,7 +73,7 @@ static int launch_ssh = 0;
 static unsigned char srcmac[ETH_ALEN];
 static unsigned char dstmac[ETH_ALEN];
 
-static struct in_addr sourceip; 
+static struct in_addr sourceip;
 static struct in_addr destip;
 static int sourceport;
 static int fwdport = MT_TUNNEL_CLIENT_PORT;
@@ -94,7 +94,6 @@ static char password[255];
 static char nonpriv_username[255];
 static int sent_auth = 0;
 
-struct net_interface interfaces[MAX_INTERFACES];
 struct net_interface *active_interface;
 
 /* Protocol data direction */
@@ -134,7 +133,7 @@ static int send_udp(struct mt_packet *packet, int retransmit) {
 		sent_bytes = net_send_udp(sockfd, active_interface, srcmac, dstmac, &sourceip,  sourceport, &destip, MT_MACTELNET_PORT, packet->data, packet->size);
 	}
 
-	/* 
+	/*
 	 * Retransmit packet if no data is received within
 	 * retransmit_intervals milliseconds.
 	 */
@@ -209,7 +208,7 @@ static void send_auth(char *username, char *password) {
 	plen = add_control_packet(&data, MT_CPTYPE_PASSWORD, md5sum, 17);
 	plen += add_control_packet(&data, MT_CPTYPE_USERNAME, username, strlen(username));
 	plen += add_control_packet(&data, MT_CPTYPE_TERM_TYPE, terminal, strlen(terminal));
-	
+
 	if (is_a_tty && get_terminal_size(&width, &height) != -1) {
 		width = htole16(width);
 		height = htole16(height);
@@ -367,34 +366,21 @@ static int find_interface() {
 	fd_set read_fds;
 	struct mt_packet data;
 	struct sockaddr_in myip;
-	unsigned char emptymac[ETH_ALEN];
-	int i, testsocket;
+	int testsocket;
 	struct timeval timeout;
 	int optval = 1;
+	struct net_interface *iface;
 
-	/* TODO: reread interfaces on HUP */
-	bzero(&interfaces, sizeof(struct net_interface) * MAX_INTERFACES);
+	net_ifaces_all();
 
-	bzero(emptymac, ETH_ALEN);
-
-	if (net_get_interfaces(interfaces, MAX_INTERFACES) <= 0) {
-		fprintf(stderr, _("Error: No suitable devices found\n"));
-		exit(1);
-	}
-
-	for (i = 0; i < MAX_INTERFACES; ++i) {
-		if (!interfaces[i].in_use) {
-			break;
-		}
-
-		/* Skip loopback interfaces */
-		if (memcmp("lo", interfaces[i].name, 2) == 0) {
+	list_for_each_entry(iface, &ifaces, list)
+	{
+		if (!strcmp(iface->name, "lo"))
 			continue;
-		}
 
 		/* Initialize receiving socket on the device chosen */
 		myip.sin_family = AF_INET;
-		memcpy((void *)&myip.sin_addr, interfaces[i].ipv4_addr, IPV4_ALEN);
+		memcpy((void *)&myip.sin_addr, iface->ipv4_addr, IPV4_ALEN);
 		myip.sin_port = htons(sourceport);
 
 		/* Initialize socket and bind to udp port */
@@ -410,16 +396,10 @@ static int find_interface() {
 			continue;
 		}
 
-		/* Ensure that we have mac-address for this interface  */
-		if (!interfaces[i].has_mac) {
-			close(testsocket);
-			continue;
-		}
-
 		/* Set the global socket handle and source mac address for send_udp() */
 		send_socket = testsocket;
-		memcpy(srcmac, interfaces[i].mac_addr, ETH_ALEN);
-		active_interface = &interfaces[i];
+		memcpy(srcmac, iface->mac_addr, ETH_ALEN);
+		active_interface = iface;
 
 		/* Send a SESSIONSTART message with the current device */
 		init_packet(&data, MT_PTYPE_SESSIONSTART, srcmac, dstmac, sessionkey, 0);

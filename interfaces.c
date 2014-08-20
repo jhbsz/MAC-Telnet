@@ -32,125 +32,16 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <linux/if_packet.h>
+#include <libubox/list.h>
+
 #include "protocol.h"
 #include "interfaces.h"
 
 #define _(String) gettext (String)
 
-struct net_interface *net_get_interface_ptr(struct net_interface *interfaces, int max_devices, char *name, int create) {
-	int i;
+LIST_HEAD(ifaces);
 
-	for (i = 0; i < max_devices; ++i) {
-		if (!interfaces[i].in_use)
-			break;
-
-		if (strncmp(interfaces[i].name, name, 254) == 0) {
-			return interfaces + i;
-		}
-	}
-
-	if (create && i < max_devices) {
-		interfaces[i].in_use = 1;
-		strncpy(interfaces[i].name, name, 254);
-		interfaces[i].name[254] = '\0';
-		return interfaces + i;
-	}
-
-	return NULL;
-}
-
-static void net_update_mac(struct net_interface *interfaces, int max_devices) {
-	unsigned char emptymac[] = {0, 0, 0, 0, 0, 0};
-	struct ifreq ifr;
-	int i,tmpsock;
-
-	tmpsock = socket(PF_INET, SOCK_DGRAM, 0);
-	if (tmpsock < 0) {
-		perror("net_update_mac");
-		exit(1);
-	}
-
-	for (i = 0; i < max_devices; ++i) {
-		if (interfaces[i].in_use) {
-			/* Find interface hardware address from device_name */
-			strncpy(ifr.ifr_name, interfaces[i].name, 16);
-			if (ioctl(tmpsock, SIOCGIFHWADDR, &ifr) == 0) {
-				/* Fetch mac address */
-				memcpy(interfaces[i].mac_addr, ifr.ifr_hwaddr.sa_data, ETH_ALEN);
-				if (memcmp(interfaces[i].mac_addr, &emptymac, ETH_ALEN) != 0) {
-					interfaces[i].has_mac = 1;
-				}
-			}
-
-		}
-	}
-	close(tmpsock);
-}
-
-static int get_device_index(char *device_name) {
-        struct ifreq ifr;
-	int tmpsock;
-
-	tmpsock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-
-	/* Find interface index from device_name */
-	strncpy(ifr.ifr_name, device_name, 16);
-	if (ioctl(tmpsock, SIOCGIFINDEX, &ifr) != 0) {
-		return -1;
-	}
-
-	/* Return interface index */
-	return ifr.ifr_ifindex;
-}
-
-int net_get_interfaces(struct net_interface *interfaces, int max_devices) {
-	static struct ifaddrs *int_addrs;
-	static const struct ifaddrs *int_cursor;
-	const struct sockaddr_in *dl_addr;
-	int found = 0;
-
-	if (getifaddrs(&int_addrs) < 0) {
-		perror("getifaddrs");
-		exit(1);
-	}
-
-	for (int_cursor = int_addrs; int_cursor != NULL; int_cursor = int_cursor->ifa_next) {
-		dl_addr = (const struct sockaddr_in *) int_cursor->ifa_addr;
-
-		if (int_cursor->ifa_addr == NULL)
-			continue;
-
-		if (int_cursor->ifa_addr->sa_family == AF_INET) {
-			struct net_interface *interface = net_get_interface_ptr(interfaces, max_devices, int_cursor->ifa_name, 1);
-			if (interface != NULL) {
-				found++;
-				memcpy(interface->ipv4_addr, &dl_addr->sin_addr, IPV4_ALEN);
-			}
-
-			interface->ifindex = get_device_index(interface->name);
-		}
-	}
-	freeifaddrs(int_addrs);
-
-	net_update_mac(interfaces, max_devices);
-
-#if 0
-	{
-		int i = 0;
-		for (i = 0; i < max_devices; ++i) {
-			if (interfaces[i].in_use) {
-				struct in_addr *addr = (struct in_addr *)interfaces[i].ipv4_addr;
-				printf("Interface %s:\n", interfaces[i].name);
-				printf("\tIP: %s\n", inet_ntoa(*addr));
-				printf("\tMAC: %s\n", ether_ntoa((struct ether_addr *)interfaces[i].mac_addr));
-				printf("\tIfIndex: %d\n", interfaces[i].ifindex);
-				printf("\n");
-			}
-		}
-	}
-#endif
-	return found;
-}
+static struct ifaddrs *ifas;
 
 unsigned short in_cksum(unsigned short *addr, int len)
 {
@@ -319,4 +210,100 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 	}
 
 	return send_result - 8 - 14 - 20;
+}
+
+void net_ifaces_init(void)
+{
+	struct net_interface *iface, *tmp;
+
+	if (!list_empty(&ifaces))
+		list_for_each_entry_safe(iface, tmp, &ifaces, list)
+		{
+			list_del(&iface->list);
+			free(iface);
+		}
+
+	if (getifaddrs(&ifas))
+		ifas = NULL;
+}
+
+struct net_interface *
+net_ifaces_add(const char *ifname)
+{
+	struct ifaddrs *ifa;
+	struct sockaddr_in *sin;
+	struct sockaddr_ll *sll;
+	struct net_interface *iface;
+
+	if (!ifas || !ifname)
+		return NULL;
+
+	iface = calloc(1, sizeof(*iface));
+
+	if (!iface)
+		return NULL;
+
+	for (ifa = ifas; ifa; ifa = ifa->ifa_next)
+	{
+		if (!ifa->ifa_addr || strcmp(ifa->ifa_name, ifname))
+			continue;
+
+		switch (ifa->ifa_addr->sa_family)
+		{
+		case AF_PACKET:
+			sll = (struct sockaddr_ll *)ifa->ifa_addr;
+			iface->ifindex = sll->sll_ifindex;
+			memcpy(iface->mac_addr, &sll->sll_addr, sizeof(iface->mac_addr));
+			break;
+
+		case AF_INET:
+			sin = (struct sockaddr_in *)ifa->ifa_addr;
+			memcpy(iface->ipv4_addr, &sin->sin_addr, sizeof(iface->ipv4_addr));
+			break;
+		}
+	}
+
+	if (!iface->ifindex)
+	{
+		free(iface);
+		return NULL;
+	}
+
+	strncpy(iface->name, ifname, sizeof(iface->name) - 1);
+	list_add_tail(&iface->list, &ifaces);
+
+	return iface;
+}
+
+struct net_interface *
+net_ifaces_lookup(const unsigned char *mac)
+{
+	struct net_interface *iface;
+
+	list_for_each_entry(iface, &ifaces, list)
+		if (!memcmp(iface->mac_addr, mac, sizeof(iface->mac_addr)))
+			return iface;
+
+	return NULL;
+}
+
+void net_ifaces_finish(void)
+{
+	if (ifas)
+		freeifaddrs(ifas);
+
+	ifas = NULL;
+}
+
+void net_ifaces_all(void)
+{
+	struct ifaddrs *ifa;
+
+	net_ifaces_init();
+
+	for (ifa = ifas; ifa; ifa = ifa->ifa_next)
+		if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_PACKET)
+			net_ifaces_add(ifa->ifa_name);
+
+	net_ifaces_finish();
 }

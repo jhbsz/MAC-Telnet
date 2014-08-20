@@ -44,8 +44,6 @@ static int sockfd, insockfd;
 
 static unsigned short ping_size = 38;
 
-struct net_interface interfaces[MAX_INTERFACES];
-
 static struct in_addr sourceip;
 static struct in_addr destip;
 static unsigned char dstmac[ETH_ALEN];
@@ -105,6 +103,7 @@ int main(int argc, char **argv)  {
 	int c;
 	struct sockaddr_in si_me;
 	struct mt_packet packet;
+	struct net_interface *iface;
 	int i;
 
 	setlocale(LC_ALL, "");
@@ -217,7 +216,7 @@ int main(int argc, char **argv)  {
 	srand(time(NULL));
 
 	/* Enumerate available interfaces */
-	net_get_interfaces(interfaces, MAX_INTERFACES);
+	net_ifaces_all();
 
 	if (ping_size < sizeof(struct timeval)) {
 		ping_size = sizeof(struct timeval);
@@ -242,25 +241,15 @@ int main(int argc, char **argv)  {
 			pingdata[ii] = rand() % 256;
 		}
 
-		for (ii = 0; ii < MAX_INTERFACES; ++ii) {
-			struct net_interface *interface = &interfaces[ii];
-
-			if (!interface->in_use) {
-				break;
-			}
-
-			if (!interface->has_mac) {
-				continue;
-			}
-
-			init_pingpacket(&packet, interface->mac_addr, dstmac);
+		list_for_each_entry(iface, &ifaces, list)
+		{
+			init_pingpacket(&packet, iface->mac_addr, dstmac);
 			add_packetdata(&packet, pingdata, ping_size);
-			result = net_send_udp(sockfd, interface, interface->mac_addr, dstmac, &sourceip, MT_MACTELNET_PORT, &destip, MT_MACTELNET_PORT, packet.data, packet.size);
+			result = net_send_udp(sockfd, iface, iface->mac_addr, dstmac, &sourceip, MT_MACTELNET_PORT, &destip, MT_MACTELNET_PORT, packet.data, packet.size);
 
 			if (result > 0) {
 				sent++;
 			}
-
 		}
 		if (sent == 0) {
 			fprintf(stderr, _("Error sending packet.\n"));
@@ -298,7 +287,7 @@ int main(int argc, char **argv)  {
 				/* Wait for the correct packet */
 				continue;
 			}
-			
+
 			struct timeval pongtimestamp;
 			struct timeval nowtimestamp;
 
@@ -306,6 +295,7 @@ int main(int argc, char **argv)  {
 			gettimeofday(&nowtimestamp, NULL);
 
 			memcpy(&pongtimestamp, pkthdr.data - 4, sizeof(pongtimestamp));
+
 			if (memcmp(pkthdr.data - 4, pingdata, ping_size) == 0) {
 				float diff = toddiff(&nowtimestamp, &pongtimestamp) / 1000.0f;
 
