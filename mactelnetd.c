@@ -50,6 +50,7 @@
 
 #include <libubox/list.h>
 #include <libubox/uloop.h>
+#include <libubox/usock.h>
 #include <libubox/md5.h>
 
 #include "protocol.h"
@@ -68,17 +69,14 @@
 #define MT_MAXPPS MT_MNDP_BROADCAST_INTERVAL * 5
 
 static int sockfd;
-static int insockfd;
-static int mndpsockfd;
 
 static int pings = 0;
 
 static int tunnel_conn = 0;
 static char nonpriv_username[255];
 
-static struct in_addr sourceip;
-static struct in_addr destip;
-static int sourceport;
+static struct in_addr sourceip = { INADDR_ANY };
+static struct in_addr destip = { INADDR_BROADCAST };
 static int fwdport = MT_TUNNEL_SERVER_PORT;
 
 static time_t last_mndp_time = 0;
@@ -162,7 +160,7 @@ static struct mt_connection *list_find_connection(unsigned short seskey, unsigne
 }
 
 static int send_udp(const struct mt_connection *conn, const struct mt_packet *packet) {
-	return net_send_udp(sockfd, conn->interface, conn->dstmac, conn->srcmac, &sourceip, sourceport, &destip, conn->srcport, packet->data, packet->size);
+	return net_send_udp(sockfd, conn->interface, conn->dstmac, conn->srcmac, &sourceip, MT_MACTELNET_PORT, &destip, conn->srcport, packet->data, packet->size);
 }
 
 static int send_special_udp(struct net_interface *interface, unsigned short port, const struct mt_packet *packet) {
@@ -288,7 +286,6 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 			setenv("SHELL", user->pw_shell, 1);
 			setenv("TERM", curconn->terminal_type, 1);
 			close(sockfd);
-			close(insockfd);
 
 			setsid();
 
@@ -337,40 +334,31 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 
 static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	struct mt_packet pdata;
+	char port[sizeof("65535\0")];
+	int optval = 1;
 
 	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	curconn->outcounter += add_control_packet(&pdata, MT_CPTYPE_END_AUTH, NULL, 0);
 	send_udp(curconn, &pdata);
 
-	if (curconn->state == STATE_ACTIVE) {
+	if (curconn->state == STATE_ACTIVE)
+		return;
+
+	/* Setup socket for connecting tunnel to server port. */
+	snprintf(port, sizeof(port), "%d", fwdport);
+	curconn->socket.fd = usock(USOCK_TCP|USOCK_IPV4ONLY|USOCK_NUMERIC, "127.0.0.1", port);
+
+	if (curconn->socket.fd < 0) {
+		syslog(LOG_ERR, "Error in connection of tunnel to server port: %s", strerror(errno));
+		abort_connection(curconn, pkthdr, "Error in connection of tunnel to server.\r\n");
 		return;
 	}
 
-	/* Setup socket for connecting tunnel to server port. */
-	curconn->socket.fd = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (curconn->socket.fd < 0) {
-		syslog(LOG_ERR, "Socket creation error: %s", strerror(errno));
-		abort_connection(curconn, pkthdr, "Socket error.\r\n");
-		return;
-	}
-	int optval = 1;
-	if(setsockopt(curconn->socket.fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
+	if (setsockopt(curconn->socket.fd, SOL_SOCKET, SO_KEEPALIVE, &optval, sizeof(optval)) < 0) {
 		syslog(LOG_ERR, "Error in setting SO_KEEPALIVE option for socket: %s", strerror(errno));
 		abort_connection(curconn, pkthdr, "Socket error.\r\n");
 		return;
 	}
-
-	/* Connect to terminal server port */
-	struct sockaddr_in socket_address;
-	memset(&socket_address, 0, sizeof(socket_address));
-	socket_address.sin_family = AF_INET;
-	socket_address.sin_port = htons(fwdport);
-	socket_address.sin_addr.s_addr = inet_addr("127.0.0.1");
-	if (connect(curconn->socket.fd, (struct sockaddr *) &socket_address, sizeof(socket_address)) < 0) {
-		syslog(LOG_ERR, "Error in connection of tunnel to server port: %s", strerror(errno));
-		abort_connection(curconn, pkthdr, "Error in connection of tunnel to server.\r\n");
-		return;
-    }
 
 	/* User is logged in */
 	curconn->state = STATE_ACTIVE;
@@ -674,7 +662,6 @@ void sigterm_handler() {
 
 	/* Doesn't hurt to tidy up */
 	close(sockfd);
-	close(insockfd);
 	closelog();
 	exit(0);
 }
@@ -786,11 +773,10 @@ static void timeout_session(struct uloop_timeout *utm)
  * TODO: Rewrite main() when all sub-functionality is tested
  */
 int main (int argc, char **argv) {
-	struct sockaddr_in si_me;
-	struct sockaddr_in si_me_mndp;
-	int c,optval = 1;
+	int c;
 	int print_help = 0;
 	int foreground = 0;
+	char port[sizeof("65535\0")];
 	unsigned char drop_priv = 0;
 	struct net_interface *iface;
 	struct uloop_timeout mndpintv = { };
@@ -899,59 +885,28 @@ int main (int argc, char **argv) {
 		}
 	}
 
+	openlog("mactelnetd", LOG_PID, LOG_DAEMON);
+
 	/* Receive regular udp packets with this socket */
-	insockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (insockfd < 0) {
-		perror("insockfd");
+	snprintf(port, sizeof(port), "%d", MT_MACTELNET_PORT);
+	insock.cb = recv_telnet;
+	insock.fd = usock(USOCK_UDP|USOCK_IPV4ONLY|USOCK_NUMERIC|USOCK_SERVER, "0.0.0.0", port);
+
+	if (insock.fd < 0) {
+		fprintf(stderr, "Error binding to 0.0.0.0:%s, %s\n", port, strerror(errno));
 		return 1;
+	} else {
+		syslog(LOG_NOTICE, "Bound to 0.0.0.0:%s", port);
 	}
-
-	/* Set source port */
-	sourceport = MT_MACTELNET_PORT;
-
-	/* Listen address*/
-	inet_pton(AF_INET, (char *)"0.0.0.0", &sourceip);
-
-	/* Set up global info about the connection */
-	inet_pton(AF_INET, (char *)"255.255.255.255", &destip);
-
-	/* Initialize receiving socket on the device chosen */
-	memset((char *) &si_me, 0, sizeof(si_me));
-	si_me.sin_family = AF_INET;
-	si_me.sin_port = htons(sourceport);
-	memcpy(&(si_me.sin_addr), &sourceip, IPV4_ALEN);
-
-	setsockopt(insockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof (optval));
-
-	/* Bind to udp port */
-	if (bind(insockfd, (struct sockaddr *)&si_me, sizeof(si_me))==-1) {
-		fprintf(stderr, "Error binding to %s:%d, %s\n", inet_ntoa(si_me.sin_addr), sourceport, strerror(errno));
-		return 1;
-	}
-
-	/* TODO: Move socket initialization out of main() */
 
 	/* Receive mndp udp packets with this socket */
-	mndpsockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (mndpsockfd < 0) {
-		perror("mndpsockfd");
-		return 1;
+	snprintf(port, sizeof(port), "%d", MT_MNDP_PORT);
+	mndpsock.cb = recv_mndp;
+	mndpsock.fd = usock(USOCK_UDP|USOCK_IPV4ONLY|USOCK_NUMERIC|USOCK_SERVER, "0.0.0.0", port);
+
+	if (mndpsock.fd < 0) {
+		fprintf(stderr, "MNDP: Error binding to 0.0.0.0:%s, %s\n", port, strerror(errno));
 	}
-
-	memset((char *)&si_me_mndp, 0, sizeof(si_me_mndp));
-	si_me_mndp.sin_family = AF_INET;
-	si_me_mndp.sin_port = htons(MT_MNDP_PORT);
-	memcpy(&(si_me_mndp.sin_addr), &sourceip, IPV4_ALEN);
-
-	setsockopt(mndpsockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof (optval));
-
-	/* Bind to udp port */
-	if (bind(mndpsockfd, (struct sockaddr *)&si_me_mndp, sizeof(si_me_mndp))==-1) {
-		fprintf(stderr, "MNDP: Error binding to %s:%d, %s\n", inet_ntoa(si_me_mndp.sin_addr), MT_MNDP_PORT, strerror(errno));
-	}
-
-	openlog("mactelnetd", LOG_PID, LOG_DAEMON);
-	syslog(LOG_NOTICE, "Bound to %s:%d", inet_ntoa(si_me.sin_addr), sourceport);
 
 	if (!foreground)
 		daemon(0, 0);
@@ -967,12 +922,7 @@ int main (int argc, char **argv) {
 
 	uloop_init();
 
-	insock.fd = insockfd;
-	insock.cb = recv_telnet;
 	uloop_fd_add(&insock, ULOOP_READ);
-
-	mndpsock.fd = mndpsockfd;
-	mndpsock.cb = recv_mndp;
 	uloop_fd_add(&mndpsock, ULOOP_READ);
 
 	mndpintv.cb = mndp_broadcast;
