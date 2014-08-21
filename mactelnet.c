@@ -21,8 +21,6 @@
     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 #define _BSD_SOURCE
-#include <libintl.h>
-#include <locale.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -53,8 +51,6 @@
 
 
 #define PROGRAM_NAME "MAC-Telnet"
-
-#define _(String) gettext (String)
 
 static int sockfd = 0;
 static int insockfd;
@@ -175,7 +171,7 @@ static int send_udp(struct mt_packet *packet, int retransmit) {
 			reset_term();
 		}
 
-		fprintf(stderr, _("\nConnection timed out\n"));
+		fprintf(stderr, "\nConnection timed out\n");
 		exit(1);
 	}
 	return sent_bytes;
@@ -286,7 +282,7 @@ static int handle_packet(unsigned char *data, int data_len) {
 			 * Authentication is handled by tunneled SSH Client and Server.
 			 */
 			else if (tunnel_conn && cpkt.cptype == MT_CPTYPE_ENCRYPTIONKEY) {
-				fprintf(stderr, _("Server %s does not seem to use MAC-SSH Protocol. Please Try using MAC-Telnet instead.\n"), ether_ntoa((struct ether_addr *)dstmac));
+				fprintf(stderr, "Server %s does not seem to use MAC-SSH Protocol. Please Try using MAC-Telnet instead.\n", ether_ntoa((struct ether_addr *)dstmac));
 				exit(1);
 			}
 
@@ -300,7 +296,7 @@ static int handle_packet(unsigned char *data, int data_len) {
 			   the data is raw terminal data to be tunneled to local SSH Client. */
 			else if (tunnel_conn && cpkt.cptype == MT_CPTYPE_PLAINDATA) {
 				if (send(fwdfd, cpkt.data, cpkt.length, 0) < 0) {
-					fprintf(stderr, _("Terminal client disconnected.\n"));
+					fprintf(stderr, "Terminal client disconnected.\n");
 					/* exit */
 					running = 0;
 				}
@@ -311,7 +307,7 @@ static int handle_packet(unsigned char *data, int data_len) {
 			else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_END_AUTH) {
 
 				if (!sent_auth) {
-					fprintf(stderr, _("Server %s does not seem to use MAC-Telnet Protocol. Please Try using MAC-SSH instead.\n"), ether_ntoa((struct ether_addr *)dstmac));
+					fprintf(stderr, "Server %s does not seem to use MAC-Telnet Protocol. Please Try using MAC-SSH instead.\n", ether_ntoa((struct ether_addr *)dstmac));
 					exit(1);
 				}
 
@@ -349,13 +345,13 @@ static int handle_packet(unsigned char *data, int data_len) {
 		send_udp(&odata, 0);
 
 		if (!quiet_mode) {
-			fprintf(stderr, _("Connection closed.\n"));
+			fprintf(stderr, "Connection closed.\n");
 		}
 
 		/* exit */
 		running = 0;
 	} else {
-		fprintf(stderr, _("Unhandeled packet type: %d received from server %s\n"), pkthdr.ptype, ether_ntoa((struct ether_addr *)dstmac));
+		fprintf(stderr, "Unhandeled packet type: %d received from server %s\n", pkthdr.ptype, ether_ntoa((struct ether_addr *)dstmac));
 		return -1;
 	}
 
@@ -433,10 +429,6 @@ int main (int argc, char **argv) {
 	unsigned char drop_priv = 0;
 	int c;
 	int optval = 1;
-
-	setlocale(LC_ALL, "");
-	bindtextdomain("mactelnet","/usr/share/locale");
-	textdomain("mactelnet");
 
 	/* Set default for ssh_path. */
 	strncpy(ssh_path, SSH_PATH, sizeof(ssh_path) - 1);
@@ -538,11 +530,11 @@ int main (int argc, char **argv) {
 	}
 	if (argc - optind < 1 || print_help) {
 		print_version();
-		fprintf(stderr, _("Usage: %s <MAC|identity> [-v] [-h] [-q] [-n] [-l] [-B] [-S] [-P <port>] "
-		                  "[-t <timeout>] [-u <user>] [-p <pass>] [-c <path>] [-U <user>]\n"), argv[0]);
+		fprintf(stderr, "Usage: %s <MAC|identity> [-v] [-h] [-q] [-n] [-l] [-B] [-S] [-P <port>] "
+		                "[-t <timeout>] [-u <user>] [-p <pass>] [-c <path>] [-U <user>]\n", argv[0]);
 
 		if (print_help) {
-			fprintf(stderr, _("\nParameters:\n"
+			fprintf(stderr, "\nParameters:\n"
 			"  MAC            MAC-Address of the RouterOS/mactelnetd device. Use MNDP to \n"
 			"                 discover it.\n"
 			"  identity       The identity/name of your destination device. Uses MNDP \n"
@@ -568,7 +560,7 @@ int main (int argc, char **argv) {
 			"  -h             This help.\n"
 			"\n"
 			"All arguments after '--' will be passed to the ssh client command.\n"
-			"\n"));
+			"\n");
 		}
 		return 1;
 	}
@@ -614,7 +606,7 @@ int main (int argc, char **argv) {
 
 	if (use_raw_socket) {
 		if (geteuid() != 0) {
-			fprintf(stderr, _("You need to have root privileges to use the -n parameter.\n"));
+			fprintf(stderr, "You need to have root privileges to use the -n parameter.\n");
 			return 1;
 		}
 
@@ -650,14 +642,14 @@ int main (int argc, char **argv) {
 
 	if (!tunnel_conn && !have_username) {
 		if (!quiet_mode) {
-			printf(_("Login: "));
+			printf("Login: ");
 		}
 		scanf("%254s", username);
 	}
 
 	if (!tunnel_conn && !have_password) {
 		char *tmp;
-		tmp = getpass(quiet_mode ? "" : _("Password: "));
+		tmp = getpass(quiet_mode ? "" : "Password: ");
 		strncpy(password, tmp, sizeof(password) - 1);
 		password[sizeof(password) - 1] = '\0';
 		/* security */
@@ -690,11 +682,11 @@ int main (int argc, char **argv) {
 		srv_socket.sin_port = htons(fwdport);
 		srv_socket.sin_addr.s_addr = inet_addr("127.0.0.1");
 		if (bind(fwdsrvfd, (struct sockaddr *) &srv_socket, sizeof(srv_socket)) < 0) {
-			fprintf(stderr, _("Error binding to %s:%d, %s\n"), "127.0.0.1", fwdport, strerror(errno));
+			fprintf(stderr, "Error binding to %s:%d, %s\n", "127.0.0.1", fwdport, strerror(errno));
 			return 1;
 		}
 		if (listen(fwdsrvfd, 1) < 0) {
-			fprintf(stderr, _("Failed listen on server socket %s:%d, %s\n"), "127.0.0.1", fwdport, strerror(errno));
+			fprintf(stderr, "Failed listen on server socket %s:%d, %s\n", "127.0.0.1", fwdport, strerror(errno));
 			return 1;
 		}
 
@@ -715,7 +707,7 @@ int main (int argc, char **argv) {
 			close(1);
 
 			/* Wait for remote terminal client connection on server port. */
-			fprintf(stderr, _("Waiting for tunnel connection on port: %d\n"), fwdport);
+			fprintf(stderr, "Waiting for tunnel connection on port: %d\n", fwdport);
 			struct sockaddr_in cli_socket;
 			unsigned int cli_socket_len = sizeof(cli_socket);
 			memset(&cli_socket, 0, sizeof(cli_socket));
@@ -726,7 +718,7 @@ int main (int argc, char **argv) {
 				perror("SO_KEEPALIVE");
 				return 1;
 			}
-			fprintf(stderr, _("Client connected to tunnel from port: %d\n"), ntohs(cli_socket.sin_port));
+			fprintf(stderr, "Client connected to tunnel from port: %d\n", ntohs(cli_socket.sin_port));
 		}
 		else if (launch_ssh && pid == 0) {
 			/* Child Code. Executes SSH Client and connects to parent to tunnel
@@ -747,7 +739,7 @@ int main (int argc, char **argv) {
 		}
 		/* Fork failure. */
 		else {
-			fprintf(stderr, _("Execution of terminal client failed.\n"));
+			fprintf(stderr, "Execution of terminal client failed.\n");
 			if (use_raw_socket) {
 				close(sockfd);
 			}
@@ -770,7 +762,7 @@ int main (int argc, char **argv) {
 	setvbuf(stdout, (char*)NULL, _IONBF, 0);
 
 	if (!quiet_mode) {
-		printf(_("Connecting to %s..."), ether_ntoa((struct ether_addr *)dstmac));
+		printf("Connecting to %s...", ether_ntoa((struct ether_addr *)dstmac));
 	}
 
 	/* Initialize receiving socket on the device chosen */
@@ -780,16 +772,16 @@ int main (int argc, char **argv) {
 
 	/* Bind to udp port */
 	if (bind(insockfd, (struct sockaddr *)&si_me, sizeof(si_me)) == -1) {
-		fprintf(stderr, _("Error binding to %s:%d, %s\n"), inet_ntoa(si_me.sin_addr), sourceport, strerror(errno));
+		fprintf(stderr, "Error binding to %s:%d, %s\n", inet_ntoa(si_me.sin_addr), sourceport, strerror(errno));
 		return 1;
 	}
 
 	if (!find_interface() || (result = recvfrom(insockfd, buff, 1400, 0, 0, 0)) < 1) {
-		fprintf(stderr, _("Connection failed.\n"));
+		fprintf(stderr, "Connection failed.\n");
 		return 1;
 	}
 	if (!quiet_mode) {
-		printf(_("done\n"));
+		printf("done\n");
 	}
 
 	/* Handle first received packet */

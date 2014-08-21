@@ -16,8 +16,6 @@
     with this program; if not, write to the Free Software Foundation, Inc.,
     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include <libintl.h>
-#include <locale.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,8 +24,6 @@
 #include <pwd.h>
 #include "users.h"
 #include "config.h"
-
-#define _(String) gettext (String)
 
 
 struct mt_credentials mt_users[MT_CRED_MAXNUM];
@@ -83,7 +79,7 @@ struct mt_credentials* find_user(char *username) {
 void drop_privileges(char *username) {
 	struct passwd *user = (struct passwd *) getpwnam(username);
 	if (user == NULL) {
-		fprintf(stderr, _("Failed dropping privileges. The user %s is not a valid username on local system.\n"), username);
+		fprintf(stderr, "Failed dropping privileges. The user %s is not a valid username on local system.\n", username);
 		exit(1);
 	}
 	if (getuid() == 0) {
@@ -103,7 +99,7 @@ void drop_privileges(char *username) {
 		}
 	}
 	else {
-		fprintf(stderr, _("Failed dropping privileges. Not running as privileged user.\n"));
+		fprintf(stderr, "Failed dropping privileges. Not running as privileged user.\n");
 		exit(1);
 	}
 }
