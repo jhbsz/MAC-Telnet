@@ -19,19 +19,20 @@
 #ifndef _USERS_H
 #define _USERS_H 1
 
-#define MT_CRED_LEN 100
-#define MT_CRED_MAXNUM 128
+#include <libubox/list.h>
+
+extern struct list_head mt_users;
 
 struct mt_credentials {
-	char username[MT_CRED_LEN];
-	char password[MT_CRED_LEN];
+	char username[100];
+	char password[100];
+
+	struct list_head list;
 };
 
-extern struct mt_credentials mt_users[MT_CRED_MAXNUM];
-
-extern void read_userfile();
+void read_userfile(void);
 struct mt_credentials* find_user(char *username);
 
-extern void drop_privileges();
+void drop_privileges(char *username);
 
 #endif

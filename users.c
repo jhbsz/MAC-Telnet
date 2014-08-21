@@ -25,58 +25,58 @@
 #include "users.h"
 #include "config.h"
 
+LIST_HEAD(mt_users);
 
-struct mt_credentials mt_users[MT_CRED_MAXNUM];
-
-void read_userfile() {
+void read_userfile(void)
+{
+	char line[BUFSIZ];
+	struct mt_credentials *cred;
 	FILE *file = fopen(USERSFILE, "r");
-	char line [BUFSIZ];
-	int i = 0;
 
 	if (file == NULL) {
 		perror(USERSFILE);
 		exit(1);
 	}
 
-	while ( fgets(line, sizeof line, file) ) {
+	while (fgets(line, sizeof line, file))
+	{
 		char *user;
 		char *password;
 
 		user = strtok(line, ":");
 		password = strtok(NULL, "\n");
 
-		if (user == NULL || password == NULL) {
-			continue;
-		}
-
-		if (user[0] == '#')
+		if (!user || !password || *user == '#')
 			continue;
 
-		memcpy(mt_users[i].username, user, strlen(user) < MT_CRED_LEN - 1? strlen(user) : MT_CRED_LEN);
-		memcpy(mt_users[i++].password, password, strlen(password)  < MT_CRED_LEN - 1? strlen(password)  : MT_CRED_LEN);
+		cred = calloc(1, sizeof(*cred));
 
-		if (i == MT_CRED_MAXNUM)
-			break;
+		if (!cred)
+			continue;
 
-		mt_users[i].username[0] = '\0';
+		strncpy(cred->username, user, sizeof(cred->username) - 1);
+		strncpy(cred->password, password, sizeof(cred->password) - 1);
+
+		list_add_tail(&cred->list, &mt_users);
 	}
+
 	fclose(file);
 }
 
-struct mt_credentials* find_user(char *username) {
-	int i = 0;
+struct mt_credentials* find_user(char *username)
+{
+	struct mt_credentials *cred;
 
-	while (i < MT_CRED_MAXNUM && mt_users[i].username[0] != 0) {
-		if (strcmp(username, mt_users[i].username) == 0) {
-			return &(mt_users[i]);
-		}
-		i++;
-	}
+	list_for_each_entry(cred, &mt_users, list)
+		if (!strcmp(cred->username, username))
+			return cred;
+
 	return NULL;
 }
 
 
-void drop_privileges(char *username) {
+void drop_privileges(char *username)
+{
 	struct passwd *user = (struct passwd *) getpwnam(username);
 	if (user == NULL) {
 		fprintf(stderr, "Failed dropping privileges. The user %s is not a valid username on local system.\n", username);
