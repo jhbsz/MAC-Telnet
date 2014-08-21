@@ -106,7 +106,6 @@ struct mt_connection {
 	int terminal_mode;
 	enum mt_connection_state state;
 	int slavefd;
-	int pid;
 	int wait_for_ack;
 	int have_enckey;
 
@@ -250,7 +249,6 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	/* Get file path for our pts */
 	slavename = ptsname(curconn->socket.fd);
 	if (slavename != NULL) {
-		pid_t pid;
 		struct passwd *user = (struct passwd *)getpwnam(curconn->username);
 		if (user == NULL) {
 			syslog(LOG_WARNING, "(%d) Login ok, but local user not accessible (%s).", curconn->seskey, curconn->username);
@@ -271,7 +269,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 			return;
 		}
 
-		if ((pid = fork()) == 0) {
+		if (fork() == 0) {
 			syslog(LOG_INFO, "(%d) User %s logged in.", curconn->seskey, curconn->username);
 
 			uloop_done();
@@ -321,7 +319,6 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 		}
 
 		close(curconn->slavefd);
-		curconn->pid = pid;
 		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
 	}
 
