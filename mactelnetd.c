@@ -280,6 +280,8 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 		if ((pid = fork()) == 0) {
 			syslog(LOG_INFO, "(%d) User %s logged in.", curconn->seskey, curconn->username);
 
+			uloop_done();
+
 			/* Initialize terminal environment */
 			setenv("USER", user->pw_name, 1);
 			setenv("HOME", user->pw_dir, 1);
