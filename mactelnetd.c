@@ -793,6 +793,8 @@ int main (int argc, char **argv) {
 	int foreground = 0;
 	unsigned char drop_priv = 0;
 	struct net_interface *iface;
+	struct uloop_timeout mndpintv = { };
+	struct uloop_fd insock = { }, mndpsock = { };
 
 	net_ifaces_init();
 
@@ -963,8 +965,6 @@ int main (int argc, char **argv) {
 	signal(SIGHUP, sighup_handler);
 	signal(SIGTERM, sigterm_handler);
 
-	struct uloop_fd insock = { }, mndpsock = { };
-
 	uloop_init();
 
 	insock.fd = insockfd;
@@ -974,8 +974,6 @@ int main (int argc, char **argv) {
 	mndpsock.fd = mndpsockfd;
 	mndpsock.cb = recv_mndp;
 	uloop_fd_add(&mndpsock, ULOOP_READ);
-
-	struct uloop_timeout mndpintv = { };
 
 	mndpintv.cb = mndp_broadcast;
 	mndp_broadcast(&mndpintv);
