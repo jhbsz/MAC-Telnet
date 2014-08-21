@@ -99,22 +99,25 @@ struct mt_connection {
 	unsigned int incounter;
 	unsigned int outcounter;
 
-	int terminal_mode;
 	enum mt_connection_state state;
-	int slavefd;
 	int wait_for_ack;
-	int have_enckey;
 
-	char username[30];
-	unsigned char trypassword[17];
 	unsigned char srcip[IPV4_ALEN];
 	unsigned char srcmac[ETH_ALEN];
 	unsigned short srcport;
 	unsigned char dstmac[ETH_ALEN];
 	unsigned char enckey[16];
+
+#ifdef TELNET_SUPPORT
+	int have_enckey;
+	int slavefd;
+	char username[30];
+	int terminal_mode;
+	char terminal_type[30];
+	unsigned char trypassword[17];
 	unsigned short terminal_width;
 	unsigned short terminal_height;
-	char terminal_type[30];
+#endif
 
 	struct list_head list;
 
@@ -131,9 +134,12 @@ static void list_remove_connection(struct mt_connection *conn) {
 	if ( conn->state == STATE_ACTIVE && conn->socket.fd > 0) {
 		close(conn->socket.fd);
 	}
+
+#ifdef TELNET_SUPPORT
 	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->slavefd > 0) {
 		close(conn->slavefd);
 	}
+#endif
 
 	list_del(&conn->list);
 
@@ -159,19 +165,6 @@ static int send_special_udp(struct net_interface *interface, unsigned short port
 	return net_send_udp(sockfd, interface, interface->mac_addr, dstmac, (const struct in_addr *)&interface->ipv4_addr, port, &destip, port, packet->data, packet->size);
 }
 
-
-static void display_banner() {
-	FILE *fp;
-	int c;
-
-	if ((fp = fopen("/etc/banner", "r"))) {
-		while ((c = getc(fp)) != EOF) {
-			putchar(c);
-		}
-		fclose(fp);
-	}
-}
-
 static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, char *message) {
 	struct mt_packet pdata;
 
@@ -183,6 +176,20 @@ static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_
 	curconn->state = STATE_CLOSED;
 	init_packet(&pdata, MT_PTYPE_END, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	send_udp(curconn, &pdata);
+}
+
+
+#ifdef TELNET_SUPPORT
+static void display_banner() {
+	FILE *fp;
+	int c;
+
+	if ((fp = fopen("/etc/banner", "r"))) {
+		while ((c = getc(fp)) != EOF) {
+			putchar(c);
+		}
+		fclose(fp);
+	}
 }
 
 static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
@@ -320,6 +327,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 
 	uloop_fd_add(&curconn->socket, ULOOP_READ | ULOOP_ERROR_CB);
 }
+#endif
 
 static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	struct mt_packet pdata;
@@ -354,6 +362,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	uloop_fd_add(&curconn->socket, ULOOP_READ);
 }
 
+#ifdef TELNET_SUPPORT
 static void send_challange(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	int i;
 	struct mt_packet pdata;
@@ -372,16 +381,20 @@ static void send_challange(struct mt_connection *curconn, struct mt_mactelnet_hd
 
 	send_udp(curconn, &pdata);
 }
+#endif
 
 static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, int data_len) {
 	struct mt_mactelnet_control_hdr cpkt;
 	unsigned char *data = pkthdr->data;
+	int success;
+
+#ifdef TELNET_SUPPORT
 	int got_user_packet = 0;
 	int got_pass_packet = 0;
 	int got_size_packet = 0;
-	int success;
 	unsigned short width;
 	unsigned short height;
+#endif
 
 	/* Parse first control packet */
 	success = parse_control_packet(data, data_len - MT_HEADER_LEN, &cpkt);
@@ -393,46 +406,58 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		case MT_CPTYPE_BEGINAUTH:
 			if (tunnel_conn)
 				setup_tunnel(curconn, pkthdr);
+#ifdef TELNET_SUPPORT
 			else
 				send_challange(curconn, pkthdr);
+#endif
 			break;
 
 		case MT_CPTYPE_TERM_WIDTH:
 			if (tunnel_conn)
 				goto require_ssh;
+#ifdef TELNET_SUPPORT
 			memcpy(&width, cpkt.data, 2);
 			curconn->terminal_width = le16toh(width);
 			got_size_packet = (curconn->state == STATE_ACTIVE);
+#endif
 			break;
 
 		case MT_CPTYPE_TERM_HEIGHT:
 			if (tunnel_conn)
 				goto require_ssh;
+#ifdef TELNET_SUPPORT
 			memcpy(&height, cpkt.data, 2);
 			curconn->terminal_height = le16toh(height);
 			got_size_packet = (curconn->state == STATE_ACTIVE);
+#endif
 			break;
 
 		case MT_CPTYPE_TERM_TYPE:
 			if (tunnel_conn)
 				goto require_ssh;
+#ifdef TELNET_SUPPORT
 			memcpy(curconn->terminal_type, cpkt.data, cpkt.length > 29 ? 29 : cpkt.length);
 			curconn->terminal_type[cpkt.length > 29 ? 29 : cpkt.length] = 0;
+#endif
 			break;
 
 		case MT_CPTYPE_USERNAME:
 			if (tunnel_conn)
 				goto require_ssh;
+#ifdef TELNET_SUPPORT
 			memcpy(curconn->username, cpkt.data, cpkt.length > 29 ? 29 : cpkt.length);
 			curconn->username[cpkt.length > 29 ? 29 : cpkt.length] = 0;
 			got_user_packet = 1;
+#endif
 			break;
 
 		case MT_CPTYPE_PASSWORD:
 			if (tunnel_conn)
 				goto require_ssh;
+#ifdef TELNET_SUPPORT
 			memcpy(curconn->trypassword, cpkt.data, 17);
 			got_pass_packet = 1;
+#endif
 			break;
 
 		case MT_CPTYPE_PLAINDATA:
@@ -454,11 +479,13 @@ static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelne
 		success = parse_control_packet(NULL, 0, &cpkt);
 	}
 
+#ifdef TELNET_SUPPORT
 	if (got_user_packet && got_pass_packet)
 		user_login(curconn, pkthdr);
 
 	if (got_size_packet)
 		set_terminal_size(curconn->socket.fd, curconn->terminal_width, curconn->terminal_height);
+#endif
 
 	return;
 
@@ -479,8 +506,8 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 	if ((iface = net_ifaces_lookup(pkt->dstaddr)) == NULL)
 		return;
 
-	switch (pkt->ptype) {
-
+	switch (pkt->ptype)
+	{
 		case MT_PTYPE_PING:
 			if (pings++ > MT_MAXPPS)
 				break;
@@ -616,11 +643,14 @@ void mndp_broadcast(struct uloop_timeout *utm) {
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_PLATFORM, PLATFORM_NAME, strlen(PLATFORM_NAME));
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_HARDWARE, s_uname.machine, strlen(s_uname.machine));
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_TIMESTAMP, &uptime, 4);
-		if (!tunnel_conn) {
+
+#ifdef TELNET_SUPPORT
+		if (!tunnel_conn)
 			mndp_add_attribute(&pdata, MT_MNDPTYPE_SOFTID, MT_SOFTID_MACTELNET, strlen(MT_SOFTID_MACTELNET));
-		} else {
+		else
+#endif
 			mndp_add_attribute(&pdata, MT_MNDPTYPE_SOFTID, MT_SOFTID_MACSSH, strlen(MT_SOFTID_MACSSH));
-		}
+
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_IFNAME, iface->name, strlen(iface->name));
 		header->cksum = in_cksum((unsigned short *)&(pdata.data), pdata.size);
 		send_special_udp(iface, MT_MNDP_PORT, &pdata);
@@ -733,9 +763,12 @@ static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)
 		if (tunnel_conn) {
 			syslog(LOG_INFO, "(%d) Connection to server closed.", p->seskey);
 		}
+#ifdef TELNET_SUPPORT
 		else if (p->username != NULL) {
 			syslog(LOG_INFO, "(%d) Connection to user %s closed.", p->seskey, p->username);
-		} else {
+		}
+#endif
+		else {
 			syslog(LOG_INFO, "(%d) Connection closed.", p->seskey);
 		}
 		list_remove_connection(p);
@@ -821,6 +854,10 @@ int main (int argc, char **argv) {
 				break;
 		}
 	}
+
+#ifndef TELNET_SUPPORT
+	tunnel_conn = 1;
+#endif
 
 	net_ifaces_finish();
 
