@@ -129,10 +129,6 @@ struct mt_connection {
 
 static LIST_HEAD(connections);
 
-static void list_add_connection(struct mt_connection *conn) {
-	list_add_tail(&conn->list, &connections);
-}
-
 static void list_remove_connection(struct mt_connection *conn) {
 	uloop_fd_delete(&conn->socket);
 	uloop_timeout_cancel(&conn->timeout);
@@ -520,7 +516,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			curconn->socket.cb = recv_bulk;
 			curconn->timeout.cb = timeout_session;
 
-			list_add_connection(curconn);
+			list_add_tail(&curconn->list, &connections);
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
