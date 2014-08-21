@@ -99,7 +99,7 @@ enum mt_connection_state {
 /** Connection struct */
 struct mt_connection {
 	struct net_interface *interface;
-	char interface_name[256];
+	char interface_name[IFNAMSIZ];
 
 	unsigned short seskey;
 	unsigned int incounter;
@@ -122,8 +122,6 @@ struct mt_connection {
 	unsigned short terminal_width;
 	unsigned short terminal_height;
 	char terminal_type[30];
-
-	struct mt_mactelnet_hdr pkthdr;
 
 	struct list_head list;
 

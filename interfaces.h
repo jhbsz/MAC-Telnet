@@ -19,21 +19,14 @@
 #ifndef _INTERFACES_H
 #define _INTERFACES_H 1
 
+#include <net/if.h>
 #include <libubox/list.h>
 
-#define MAX_INTERFACES 32
-
 struct net_interface {
-	char name[256];
+	char name[IFNAMSIZ];
 	unsigned char ipv4_addr[IPV4_ALEN];
 	unsigned char mac_addr[ETH_ALEN];
-
-	/* used by mactelnetd */
-	int socketfd;
-
 	int ifindex;
-	int has_mac;
-	int in_use;
 
 	struct list_head list;
 };
