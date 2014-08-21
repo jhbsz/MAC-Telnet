@@ -579,27 +579,23 @@ require_ssh:
 static void recv_bulk(struct uloop_fd *ufd, unsigned int ev);
 static void timeout_session(struct uloop_timeout *utm);
 
-static void handle_packet(unsigned char *data, int data_len, const struct sockaddr_in *address) {
-	struct mt_mactelnet_hdr pkthdr;
+static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src, int data_len) {
 	struct mt_connection *curconn = NULL;
 	struct mt_packet pdata;
 	struct net_interface *iface;
 
-	parse_packet(data, &pkthdr);
-
 	/* Drop packets not belonging to us */
-	if ((iface = net_ifaces_lookup(pkthdr.dstaddr)) == NULL) {
+	if ((iface = net_ifaces_lookup(pkt->dstaddr)) == NULL)
 		return;
-	}
 
-	switch (pkthdr.ptype) {
+	switch (pkt->ptype) {
 
 		case MT_PTYPE_PING:
 			if (pings++ > MT_MAXPPS) {
 				break;
 			}
-			init_pongpacket(&pdata, (unsigned char *)&(pkthdr.dstaddr), (unsigned char *)&(pkthdr.srcaddr));
-			add_packetdata(&pdata, pkthdr.data - 4, data_len - (MT_HEADER_LEN - 4));
+			init_pongpacket(&pdata, (unsigned char *)&(pkt->dstaddr), (unsigned char *)&(pkt->srcaddr));
+			add_packetdata(&pdata, pkt->data - 4, data_len - (MT_HEADER_LEN - 4));
 			{
 				if (index >= 0) {
 					send_special_udp(iface, MT_MACTELNET_PORT, &pdata);
@@ -608,16 +604,16 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			break;
 
 		case MT_PTYPE_SESSIONSTART:
-			syslog(LOG_DEBUG, "(%d) New connection from %s.", pkthdr.seskey, ether_ntoa((struct ether_addr*)&(pkthdr.srcaddr)));
+			syslog(LOG_DEBUG, "(%d) New connection from %s.", pkt->seskey, ether_ntoa((struct ether_addr*)&(pkt->srcaddr)));
 			curconn = calloc(1, sizeof(struct mt_connection));
-			curconn->seskey = pkthdr.seskey;
+			curconn->seskey = pkt->seskey;
 			curconn->state = STATE_AUTH;
 			curconn->interface = iface;
 			strncpy(curconn->interface_name, iface->name, sizeof(curconn->interface_name) - 1);
-			memcpy(curconn->srcmac, pkthdr.srcaddr, ETH_ALEN);
-			memcpy(curconn->srcip, &(address->sin_addr), IPV4_ALEN);
-			curconn->srcport = htons(address->sin_port);
-			memcpy(curconn->dstmac, pkthdr.dstaddr, ETH_ALEN);
+			memcpy(curconn->srcmac, pkt->srcaddr, ETH_ALEN);
+			memcpy(curconn->srcip, &(src->sin_addr), IPV4_ALEN);
+			curconn->srcport = htons(src->sin_port);
+			memcpy(curconn->dstmac, pkt->dstaddr, ETH_ALEN);
 
 			curconn->socket.cb = recv_bulk;
 			curconn->timeout.cb = timeout_session;
@@ -625,17 +621,17 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			list_add_connection(curconn);
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
-			init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
+			init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
 			send_udp(curconn, &pdata);
 			break;
 
 		case MT_PTYPE_END:
-			curconn = list_find_connection(pkthdr.seskey, (unsigned char *)&(pkthdr.srcaddr));
+			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
 			if (curconn == NULL) {
 				break;
 			}
 			if (curconn->state != STATE_CLOSED) {
-				init_packet(&pdata, MT_PTYPE_END, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
+				init_packet(&pdata, MT_PTYPE_END, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 			syslog(LOG_DEBUG, "(%d) Connection closed.", curconn->seskey);
@@ -643,18 +639,18 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			return;
 
 		case MT_PTYPE_ACK:
-			curconn = list_find_connection(pkthdr.seskey, (unsigned char *)&(pkthdr.srcaddr));
+			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
 			if (curconn == NULL) {
 				break;
 			}
 
-			if (pkthdr.counter <= curconn->outcounter) {
+			if (pkt->counter <= curconn->outcounter) {
 				curconn->wait_for_ack = 0;
 			}
 
 			if (uloop_timeout_remaining(&curconn->timeout) > 9000) {
 				// Answer to anti-timeout packet
-				init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
+				init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 
@@ -662,31 +658,31 @@ static void handle_packet(unsigned char *data, int data_len, const struct sockad
 			return;
 
 		case MT_PTYPE_DATA:
-			curconn = list_find_connection(pkthdr.seskey, (unsigned char *)&(pkthdr.srcaddr));
+			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
 			if (curconn == NULL) {
 				break;
 			}
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			/* ack the data packet */
-			init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter + (data_len - MT_HEADER_LEN));
+			init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter + (data_len - MT_HEADER_LEN));
 			send_udp(curconn, &pdata);
 
 			/* Accept first packet, and all packets greater than incounter, and if counter has
 			wrapped around. */
-			if (curconn->incounter == 0 || pkthdr.counter > curconn->incounter || (curconn->incounter - pkthdr.counter) > 16777216) {
-				curconn->incounter = pkthdr.counter;
+			if (curconn->incounter == 0 || pkt->counter > curconn->incounter || (curconn->incounter - pkt->counter) > 16777216) {
+				curconn->incounter = pkt->counter;
 			} else {
 				/* Ignore double or old packets */
 				return;
 			}
 
-			handle_data_packet(curconn, &pkthdr, data_len);
+			handle_data_packet(curconn, pkt, data_len);
 			break;
 		default:
 			if (curconn) {
-				syslog(LOG_WARNING, "(%d) Unhandeled packet type: %d", curconn->seskey, pkthdr.ptype);
-				init_packet(&pdata, MT_PTYPE_ACK, pkthdr.dstaddr, pkthdr.srcaddr, pkthdr.seskey, pkthdr.counter);
+				syslog(LOG_WARNING, "(%d) Unhandeled packet type: %d", curconn->seskey, pkt->ptype);
+				init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 		}
@@ -822,27 +818,30 @@ void sighup_handler() {
 
 static void recv_telnet(struct uloop_fd *ufd, unsigned int ev)
 {
-	int result;
-	unsigned char buff[1500];
-	struct sockaddr_in saddress;
-	unsigned int slen = sizeof(saddress);
-	result = recvfrom(ufd->fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
-	handle_packet(buff, result, &saddress);
+	struct sockaddr_in src = { };
+	struct mt_mactelnet_hdr hdr = { };
+
+	int len = net_recv_packet(ufd->fd, &hdr, &src);
+
+	if (len <= 0)
+		return;
+
+	handle_packet(&hdr, &src, len);
 }
 
 static void recv_mndp(struct uloop_fd *ufd, unsigned int ev)
 {
-	int result;
-	unsigned char buff[1500];
-	struct sockaddr_in saddress;
-	unsigned int slen = sizeof(saddress);
-	result = recvfrom(ufd->fd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
+	int len = net_recv_packet(ufd->fd, NULL, NULL);
 
-	/* Handle MNDP broadcast request, max 1 rps */
-	if (result == 4 && time(NULL) - last_mndp_time > 0) {
-		mndp_broadcast(NULL);
-		time(&last_mndp_time);
-	}
+	if (len < 4)
+		return;
+
+	/* max 1 rps */
+	if (time(NULL) - last_mndp_time <= 0)
+		return;
+
+	mndp_broadcast(NULL);
+	time(&last_mndp_time);
 }
 
 static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)

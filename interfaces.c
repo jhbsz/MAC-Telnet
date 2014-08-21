@@ -38,6 +38,7 @@
 LIST_HEAD(ifaces);
 
 static struct ifaddrs *ifas;
+static unsigned char packetbuf[1500];
 
 unsigned short in_cksum(unsigned short *addr, int len)
 {
@@ -206,6 +207,22 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 	}
 
 	return send_result - 8 - 14 - 20;
+}
+
+int net_recv_packet(int fd, struct mt_mactelnet_hdr *h, struct sockaddr_in *s)
+{
+	int result;
+	unsigned int slen = s ? sizeof(*s) : 0;
+
+	memset(packetbuf, 0, sizeof(packetbuf));
+
+	result = recvfrom(fd, packetbuf, sizeof(packetbuf), 0,
+	                  (struct sockaddr *)s, &slen);
+
+	if (result > 0 && h)
+		parse_packet(packetbuf, h);
+
+	return result;
 }
 
 void net_ifaces_init(void)

@@ -51,4 +51,6 @@ struct net_interface *net_ifaces_lookup(const unsigned char *mac);
 void net_ifaces_finish(void);
 void net_ifaces_all(void);
 
+int net_recv_packet(int fd, struct mt_mactelnet_hdr *h, struct sockaddr_in *s);
+
 #endif

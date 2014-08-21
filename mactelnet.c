@@ -104,7 +104,7 @@ static char ssh_path[512];
 static char **ssh_argv;
 
 
-static int handle_packet(unsigned char *data, int data_len);
+static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len);
 
 static void print_version() {
 	fprintf(stderr, PROGRAM_NAME " " PROGRAM_VERSION "\n");
@@ -112,6 +112,7 @@ static void print_version() {
 
 static int send_udp(struct mt_packet *packet, int retransmit) {
 	int sent_bytes;
+	struct mt_mactelnet_hdr hdr = { };
 
 	/* Clear keepalive counter */
 	keepalive_counter = 0;
@@ -151,16 +152,11 @@ static int send_udp(struct mt_packet *packet, int retransmit) {
 			/* Wait for data or timeout */
 			reads = select(insockfd + 1, &read_fds, NULL, NULL, &timeout);
 			if (reads && FD_ISSET(insockfd, &read_fds)) {
-				unsigned char buff[1500];
-				int result;
-
-				bzero(buff, 1500);
-				result = recvfrom(insockfd, buff, 1500, 0, 0, 0);
+				int result = net_recv_packet(insockfd, &hdr, NULL);
 
 				/* Handle incoming packets, waiting for an ack */
-				if (result > 0 && handle_packet(buff, result) == MT_PTYPE_ACK) {
+				if (result > 0 && handle_packet(&hdr, result) == MT_PTYPE_ACK)
 					return sent_bytes;
-				}
 			}
 
 			/* Retransmit */
@@ -240,36 +236,33 @@ static void sig_winch(int sig) {
 	signal(SIGWINCH, sig_winch);
 }
 
-static int handle_packet(unsigned char *data, int data_len) {
-	struct mt_mactelnet_hdr pkthdr;
-	parse_packet(data, &pkthdr);
-
+static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 	/* We only care about packets with correct sessionkey */
-	if (pkthdr.seskey != sessionkey) {
+	if (pkt->seskey != sessionkey) {
 		return -1;
 	}
 
 	/* Handle data packets */
-	if (pkthdr.ptype == MT_PTYPE_DATA) {
+	if (pkt->ptype == MT_PTYPE_DATA) {
 		struct mt_packet odata;
 		struct mt_mactelnet_control_hdr cpkt;
 		int success = 0;
 
 		/* Always transmit ACKNOWLEDGE packets in response to DATA packets */
-		init_packet(&odata, MT_PTYPE_ACK, srcmac, dstmac, sessionkey, pkthdr.counter + (data_len - MT_HEADER_LEN));
+		init_packet(&odata, MT_PTYPE_ACK, srcmac, dstmac, sessionkey, pkt->counter + (data_len - MT_HEADER_LEN));
 		send_udp(&odata, 0);
 
 		/* Accept first packet, and all packets greater than incounter, and if counter has
 		wrapped around. */
-		if (incounter == 0 || pkthdr.counter > incounter || (incounter - pkthdr.counter) > 65535) {
-			incounter = pkthdr.counter;
+		if (incounter == 0 || pkt->counter > incounter || (incounter - pkt->counter) > 65535) {
+			incounter = pkt->counter;
 		} else {
 			/* Ignore double or old packets */
 			return -1;
 		}
 
 		/* Parse controlpacket data */
-		success = parse_control_packet(data + MT_HEADER_LEN, data_len - MT_HEADER_LEN, &cpkt);
+		success = parse_control_packet(pkt->data, data_len - MT_HEADER_LEN, &cpkt);
 
 		while (success) {
 
@@ -332,16 +325,16 @@ static int handle_packet(unsigned char *data, int data_len) {
 			success = parse_control_packet(NULL, 0, &cpkt);
 		}
 	}
-	else if (pkthdr.ptype == MT_PTYPE_ACK) {
+	else if (pkt->ptype == MT_PTYPE_ACK) {
 		/* Handled elsewhere */
 	}
 
 	/* The server wants to terminate the connection, we have to oblige */
-	else if (pkthdr.ptype == MT_PTYPE_END) {
+	else if (pkt->ptype == MT_PTYPE_END) {
 		struct mt_packet odata;
 
 		/* Acknowledge the disconnection by sending a END packet in return */
-		init_packet(&odata, MT_PTYPE_END, srcmac, dstmac, pkthdr.seskey, 0);
+		init_packet(&odata, MT_PTYPE_END, srcmac, dstmac, pkt->seskey, 0);
 		send_udp(&odata, 0);
 
 		if (!quiet_mode) {
@@ -351,11 +344,11 @@ static int handle_packet(unsigned char *data, int data_len) {
 		/* exit */
 		running = 0;
 	} else {
-		fprintf(stderr, "Unhandeled packet type: %d received from server %s\n", pkthdr.ptype, ether_ntoa((struct ether_addr *)dstmac));
+		fprintf(stderr, "Unhandeled packet type: %d received from server %s\n", pkt->ptype, ether_ntoa((struct ether_addr *)dstmac));
 		return -1;
 	}
 
-	return pkthdr.ptype;
+	return pkt->ptype;
 }
 
 static int find_interface() {
@@ -423,8 +416,8 @@ static int find_interface() {
 int main (int argc, char **argv) {
 	int result;
 	struct mt_packet data;
+	struct mt_mactelnet_hdr hdr = { };
 	struct sockaddr_in si_me;
-	unsigned char buff[1500];
 	unsigned char print_help = 0, have_username = 0, have_password = 0;
 	unsigned char drop_priv = 0;
 	int c;
@@ -776,7 +769,7 @@ int main (int argc, char **argv) {
 		return 1;
 	}
 
-	if (!find_interface() || (result = recvfrom(insockfd, buff, 1400, 0, 0, 0)) < 1) {
+	if (!find_interface() || (result = net_recv_packet(insockfd, &hdr, NULL)) < 1) {
 		fprintf(stderr, "Connection failed.\n");
 		return 1;
 	}
@@ -785,7 +778,7 @@ int main (int argc, char **argv) {
 	}
 
 	/* Handle first received packet */
-	handle_packet(buff, result);
+	handle_packet(&hdr, result);
 
 	init_packet(&data, MT_PTYPE_DATA, srcmac, dstmac, sessionkey, 0);
 	outcounter +=  add_control_packet(&data, MT_CPTYPE_BEGINAUTH, NULL, 0);
@@ -822,9 +815,10 @@ int main (int argc, char **argv) {
 		if (reads > 0) {
 			/* Handle data from server */
 			if (FD_ISSET(insockfd, &read_fds)) {
-				bzero(buff, 1500);
-				result = recvfrom(insockfd, buff, 1500, 0, 0, 0);
-				handle_packet(buff, result);
+				result = net_recv_packet(insockfd, &hdr, NULL);
+
+				if (result > 0)
+					handle_packet(&hdr, result);
 			}
 			unsigned char keydata[512];
 			int datalen = 0;
