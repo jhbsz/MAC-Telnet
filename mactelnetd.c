@@ -503,16 +503,12 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 	switch (pkt->ptype) {
 
 		case MT_PTYPE_PING:
-			if (pings++ > MT_MAXPPS) {
+			if (pings++ > MT_MAXPPS)
 				break;
-			}
+
 			init_pongpacket(&pdata, (unsigned char *)&(pkt->dstaddr), (unsigned char *)&(pkt->srcaddr));
 			add_packetdata(&pdata, pkt->data - 4, data_len - (MT_HEADER_LEN - 4));
-			{
-				if (index >= 0) {
-					send_special_udp(iface, MT_MACTELNET_PORT, &pdata);
-				}
-			}
+			send_special_udp(iface, MT_MACTELNET_PORT, &pdata);
 			break;
 
 		case MT_PTYPE_SESSIONSTART:
