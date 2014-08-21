@@ -61,10 +61,6 @@
 
 #define PROGRAM_NAME "MAC-Telnet Daemon"
 
-#define MAX_INSOCKETS 100
-
-#define MT_INTERFACE_LEN 128
-
 /* Max ~5 pings per second */
 #define MT_MAXPPS MT_MNDP_BROADCAST_INTERVAL * 5
 
