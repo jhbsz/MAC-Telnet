@@ -129,9 +129,6 @@ struct mt_connection {
 	struct uloop_fd socket;
 };
 
-static void uwtmp_login(struct mt_connection *);
-static void uwtmp_logout(struct mt_connection *);
-
 static LIST_HEAD(connections);
 
 static void list_add_connection(struct mt_connection *conn) {
@@ -147,10 +144,6 @@ static void list_remove_connection(struct mt_connection *conn) {
 	}
 	if (!tunnel_conn && conn->state == STATE_ACTIVE && conn->slavefd > 0) {
 		close(conn->slavefd);
-	}
-
-	if (!tunnel_conn) {
-		uwtmp_logout(conn);
 	}
 
 	list_del(&conn->list);
@@ -178,80 +171,15 @@ static int send_special_udp(struct net_interface *interface, unsigned short port
 }
 
 
-static void display_motd() {
+static void display_banner() {
 	FILE *fp;
 	int c;
 
-	if ((fp = fopen("/etc/motd", "r"))) {
+	if ((fp = fopen("/etc/banner", "r"))) {
 		while ((c = getc(fp)) != EOF) {
 			putchar(c);
 		}
 		fclose(fp);
-	}
-}
-
-static void display_nologin() {
-	FILE *fp;
-	int c;
-
-	if ((fp = fopen(_PATH_NOLOGIN, "r"))) {
-		while ((c = getc(fp)) != EOF) {
-			putchar(c);
-		}
-		fclose(fp);
-	}
-}
-
-static void uwtmp_login(struct mt_connection *conn) {
-	struct utmp utent;
-	pid_t pid;
-
-	pid = getpid();
-
-	char *line = ttyname(conn->slavefd);
-	if (strncmp(line, "/dev/", 5) == 0) {
-		line += 5;
-	}
-
-	/* Setup utmp struct */
-	memset((void *) &utent, 0, sizeof(utent));
-	utent.ut_type = USER_PROCESS;
-	utent.ut_pid = pid;
-	strncpy(utent.ut_user, conn->username, sizeof(utent.ut_user));
-	strncpy(utent.ut_line, line, sizeof(utent.ut_line));
-	strncpy(utent.ut_id, utent.ut_line + 3, sizeof(utent.ut_id));
-	strncpy(utent.ut_host, ether_ntoa((const struct ether_addr *)conn->srcmac), sizeof(utent.ut_host));
-	time((time_t *)&(utent.ut_time));
-
-	/* Update utmp and/or wtmp */
-	setutent();
-	pututline(&utent);
-	endutent();
-	updwtmp(_PATH_WTMP, &utent);
-}
-
-static void uwtmp_logout(struct mt_connection *conn) {
-	if (conn->pid > 0) {
-		struct utmp *utentp;
-		struct utmp utent;
-		setutent();
-
-		while ((utentp = getutent()) != NULL) {
-			if (utentp->ut_pid == conn->pid && utentp->ut_id) {
-				break;
-			}
-		}
-
-		if (utentp) {
-			utent = *utentp;
-
-			utent.ut_type = DEAD_PROCESS;
-			utent.ut_tv.tv_sec = time(NULL);
-
-			pututline(&utent);
-			endutent();
-			updwtmp(_PATH_WTMP, &utent);
-		}
 	}
 }
 
@@ -329,7 +257,6 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 	slavename = ptsname(curconn->socket.fd);
 	if (slavename != NULL) {
 		pid_t pid;
-		struct stat sb;
 		struct passwd *user = (struct passwd *)getpwnam(curconn->username);
 		if (user == NULL) {
 			syslog(LOG_WARNING, "(%d) Login ok, but local user not accessible (%s).", curconn->seskey, curconn->username);
@@ -351,9 +278,6 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 		}
 
 		if ((pid = fork()) == 0) {
-			/* Add login information to utmp/wtmp */
-			uwtmp_login(curconn);
-
 			syslog(LOG_INFO, "(%d) User %s logged in.", curconn->seskey, curconn->username);
 
 			/* Initialize terminal environment */
@@ -390,18 +314,8 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 				exit(0);
 			}
 
-			/* Abort login if /etc/nologin exists */
-			if (stat(_PATH_NOLOGIN, &sb) == 0 && getuid() != 0) {
-				syslog(LOG_NOTICE, "(%d) User %s disconnected with " _PATH_NOLOGIN " message.", curconn->seskey, curconn->username);
-				display_nologin();
-				curconn->state = STATE_CLOSED;
-				init_packet(&pdata, MT_PTYPE_END, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
-				send_udp(curconn, &pdata);
-				exit(0);
-			}
-
 			/* Display MOTD */
-			display_motd();
+			display_banner();
 
 			chdir(user->pw_dir);
 
