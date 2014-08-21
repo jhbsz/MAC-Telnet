@@ -515,7 +515,11 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 		case MT_PTYPE_SESSIONSTART:
 			syslog(LOG_DEBUG, "(%d) New connection from %s.", pkt->seskey, ether_ntoa((struct ether_addr*)&(pkt->srcaddr)));
-			curconn = calloc(1, sizeof(struct mt_connection));
+
+			curconn = calloc(1, sizeof(*curconn));
+			if (!curconn)
+				break;
+
 			curconn->seskey = pkt->seskey;
 			curconn->state = STATE_AUTH;
 			curconn->interface = iface;
@@ -537,9 +541,9 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 		case MT_PTYPE_END:
 			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
-			if (curconn == NULL) {
+			if (!curconn)
 				break;
-			}
+
 			if (curconn->state != STATE_CLOSED) {
 				init_packet(&pdata, MT_PTYPE_END, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
@@ -550,9 +554,8 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 		case MT_PTYPE_ACK:
 			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
-			if (curconn == NULL) {
+			if (!curconn)
 				break;
-			}
 
 			if (pkt->counter <= curconn->outcounter) {
 				curconn->wait_for_ack = 0;
@@ -569,9 +572,9 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 		case MT_PTYPE_DATA:
 			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
-			if (curconn == NULL) {
+			if (!curconn)
 				break;
-			}
+
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			/* ack the data packet */
@@ -589,6 +592,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 			handle_data_packet(curconn, pkt, data_len);
 			break;
+
 		default:
 			if (curconn) {
 				syslog(LOG_WARNING, "(%d) Unhandeled packet type: %d", curconn->seskey, pkt->ptype);
