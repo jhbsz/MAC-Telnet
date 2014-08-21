@@ -599,31 +599,6 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 	}
 }
 
-static void daemonize() {
-	int pid,fd;
-
-	pid = fork();
-
-	/* Error? */
-	if (pid < 0) {
-		exit(1);
-	}
-
-	/* Parent exit */
-	if (pid > 0) {
-		exit(0);
-	}
-
-	setsid();
-	close(0);
-	close(1);
-	close(2);
-
-	fd = open("/dev/null",O_RDWR);
-	dup(fd);
-	dup(fd);
-}
-
 static void print_version() {
 	fprintf(stderr, PROGRAM_NAME " " PROGRAM_VERSION "\n");
 }
@@ -970,9 +945,8 @@ int main (int argc, char **argv) {
 	openlog("mactelnetd", LOG_PID, LOG_DAEMON);
 	syslog(LOG_NOTICE, "Bound to %s:%d", inet_ntoa(si_me.sin_addr), sourceport);
 
-	if (!foreground) {
-		daemonize();
-	}
+	if (!foreground)
+		daemon(0, 0);
 
 	/* Handle zombies etc */
 	signal(SIGCHLD,SIG_IGN);
