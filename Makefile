@@ -46,7 +46,7 @@ po/mactelnet.pot: *.c
 	xgettext --package-name=mactelnet --msgid-bugs-address=haakon.nessjoen@gmail.com -d mactelnet -C -c_ -k_ -kgettext_noop *.c -o po/mactelnet.pot
 
 users.o: users.c users.h
-	${CC} -Wall ${CFLAGS} -DUSERSFILE='"/etc/mactelnetd.users"' -c users.c
+	${CC} -Wall ${CFLAGS} -DUSERSFILE='"/var/etc/mactelnetd.users"' -c users.c
 
 protocol.o: protocol.c protocol.h
 	${CC} -Wall ${CFLAGS} -c protocol.c
