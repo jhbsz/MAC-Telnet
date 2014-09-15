@@ -85,9 +85,9 @@ enum mt_mndp_attrtype {
 
 /* MNDP packet header */
 struct mt_mndp_hdr {
-  unsigned char version;
-  unsigned char ttl;
-  unsigned short cksum;
+	unsigned char version;
+	unsigned char ttl;
+	unsigned short cksum;
 };
 
 struct mt_mactelnet_hdr {

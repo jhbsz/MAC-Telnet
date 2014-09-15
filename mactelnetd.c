@@ -1,24 +1,24 @@
 /*
-    Mac-Telnet - Connect to RouterOS or mactelnetd devices via MAC address
-    Copyright (C) 2010, Håkon Nessjøen <haakon.nessjoen@gmail.com>
+	Mac-Telnet - Connect to RouterOS or mactelnetd devices via MAC address
+	Copyright (C) 2010, Håkon Nessjøen <haakon.nessjoen@gmail.com>
 
 	Shameless hack by Ali Onur Uyar to add support for SSH Tunneling through
-    MAC-Telnet protocol.
-    Copyright (C) 2011, Ali Onur Uyar <aouyar@gmail.com>
+	MAC-Telnet protocol.
+	Copyright (C) 2011, Ali Onur Uyar <aouyar@gmail.com>
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation; either version 2 of the License, or
-    (at your option) any later version.
+	This program is free software; you can redistribute it and/or modify
+	it under the terms of the GNU General Public License as published by
+	the Free Software Foundation; either version 2 of the License, or
+	(at your option) any later version.
 
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+	This program is distributed in the hope that it will be useful,
+	but WITHOUT ANY WARRANTY; without even the implied warranty of
+	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+	GNU General Public License for more details.
 
-    You should have received a copy of the GNU General Public License along
-    with this program; if not, write to the Free Software Foundation, Inc.,
-    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+	You should have received a copy of the GNU General Public License along
+	with this program; if not, write to the Free Software Foundation, Inc.,
+	51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 #define _XOPEN_SOURCE 600
 #define _BSD_SOURCE
@@ -850,7 +850,7 @@ int main (int argc, char **argv) {
 					fprintf(stderr, "No such interface: %s\n", optarg);
 				else
 					syslog(LOG_NOTICE, "Listening on %s for %s\n",
-					       iface->name, ether_ntoa(iface->mac_addr));
+						   iface->name, ether_ntoa(iface->mac_addr));
 				break;
 		}
 	}
@@ -907,7 +907,7 @@ int main (int argc, char **argv) {
 		}
 		else {
 			fprintf(stderr, "Drop privileges (-U) option ignored. "
-					        "Standard MAC-Telnet is not compatible with this option.\n");
+							"Standard MAC-Telnet is not compatible with this option.\n");
 		}
 	}
 
