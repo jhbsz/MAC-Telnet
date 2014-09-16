@@ -303,9 +303,9 @@ struct mt_mndp_info *parse_mndp(const uint8_t *data, const int packet_len) {
 
 	bzero(&packet, sizeof(packet));
 
-	mndp_hdr = (struct mt_mndp_hdr*)data;
+	mndp_hdr = (struct mt_mndp_hdr *)data;
 
-	memcpy(&(packet.header), mndp_hdr, sizeof(mndp_hdr));
+	memcpy(&packet.header, mndp_hdr, sizeof(*mndp_hdr));
 
 	p = data + sizeof(struct mt_mndp_hdr);
 
