@@ -19,6 +19,7 @@
 #include <sys/ioctl.h>
 #include <string.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <termios.h>
@@ -57,7 +58,7 @@ int reset_term() {
 	return 0;
 }
 
-int get_terminal_size(unsigned short *width, unsigned short *height) {
+int get_terminal_size(uint16_t *width, uint16_t *height) {
 	struct winsize ws;
 
 	if (ioctl(STDIN_FILENO, TIOCGWINSZ, &ws) != 0) {
@@ -71,7 +72,7 @@ int get_terminal_size(unsigned short *width, unsigned short *height) {
 	return 0;
 }
 
-int set_terminal_size(int fd, unsigned short width, unsigned short height) {
+int set_terminal_size(int fd, uint16_t width, uint16_t height) {
 	struct winsize ws;
 
 	ws.ws_col = width;
@@ -84,4 +85,3 @@ int set_terminal_size(int fd, unsigned short width, unsigned short height) {
 
 	return 0;
 }
-

@@ -56,18 +56,18 @@ static int sockfd = 0;
 static int insockfd;
 static int fwdfd = 0;
 
-static unsigned int outcounter = 0;
-static unsigned int incounter = 0;
+static uint32_t outcounter = 0;
+static uint32_t incounter = 0;
 static int sessionkey = 0;
 static int running = 1;
 
-static unsigned char use_raw_socket = 0;
-static unsigned char terminal_mode = 0;
+static uint8_t use_raw_socket = 0;
+static uint8_t terminal_mode = 0;
 static int tunnel_conn = 0;
 static int launch_ssh = 0;
 
-static unsigned char srcmac[ETH_ALEN];
-static unsigned char dstmac[ETH_ALEN];
+static struct ether_addr srcmac;
+static struct ether_addr dstmac;
 
 static struct in_addr sourceip;
 static struct in_addr destip;
@@ -84,7 +84,7 @@ static int batch_mode = 0;
 
 static int keepalive_counter = 0;
 
-static unsigned char encryptionkey[128];
+static uint8_t encryptionkey[128];
 static char username[255];
 static char password[255];
 static char nonpriv_username[255];
@@ -93,9 +93,9 @@ static int sent_auth = 0;
 struct net_interface *active_interface;
 
 /* Protocol data direction */
-unsigned char mt_direction_fromserver = 0;
+uint8_t mt_direction_fromserver = 0;
 
-static unsigned int send_socket;
+static uint32_t send_socket;
 
 /* SSH Executable Path */
 static char ssh_path[512];
@@ -127,7 +127,7 @@ static int send_udp(struct mt_packet *packet, int retransmit) {
 
 		sent_bytes = sendto(send_socket, packet->data, packet->size, 0, (struct sockaddr*)&socket_address, sizeof(socket_address));
 	} else {
-		sent_bytes = net_send_udp(sockfd, active_interface, srcmac, dstmac, &sourceip,  sourceport, &destip, MT_MACTELNET_PORT, packet->data, packet->size);
+		sent_bytes = net_send_udp(sockfd, active_interface, &srcmac, &dstmac, &sourceip,  sourceport, &destip, MT_MACTELNET_PORT, packet->data, packet->size);
 	}
 
 	/*
@@ -175,11 +175,11 @@ static int send_udp(struct mt_packet *packet, int retransmit) {
 
 static void send_auth(char *username, char *password) {
 	struct mt_packet data;
-	unsigned short width = 0;
-	unsigned short height = 0;
+	uint16_t width = 0;
+	uint16_t height = 0;
 	char *terminal = getenv("TERM");
 	char md5data[100];
-	unsigned char md5sum[17];
+	uint8_t md5sum[17];
 	int plen;
 	md5_state_t state;
 
@@ -196,7 +196,7 @@ static void send_auth(char *username, char *password) {
 	md5sum[0] = 0;
 
 	/* Send combined packet to server */
-	init_packet(&data, MT_PTYPE_DATA, srcmac, dstmac, sessionkey, outcounter);
+	init_packet(&data, MT_PTYPE_DATA, &srcmac, &dstmac, sessionkey, outcounter);
 	plen = add_control_packet(&data, MT_CPTYPE_PASSWORD, md5sum, 17);
 	plen += add_control_packet(&data, MT_CPTYPE_USERNAME, username, strlen(username));
 	plen += add_control_packet(&data, MT_CPTYPE_TERM_TYPE, terminal, strlen(terminal));
@@ -216,13 +216,13 @@ static void send_auth(char *username, char *password) {
 }
 
 static void sig_winch(int sig) {
-	unsigned short width,height;
+	uint16_t width,height;
 	struct mt_packet data;
 	int plen;
 
 	/* terminal height/width has changed, inform server */
 	if (get_terminal_size(&width, &height) != -1) {
-		init_packet(&data, MT_PTYPE_DATA, srcmac, dstmac, sessionkey, outcounter);
+		init_packet(&data, MT_PTYPE_DATA, &srcmac, &dstmac, sessionkey, outcounter);
 		width = htole16(width);
 		height = htole16(height);
 		plen = add_control_packet(&data, MT_CPTYPE_TERM_WIDTH, &width, 2);
@@ -249,7 +249,7 @@ static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 		int success = 0;
 
 		/* Always transmit ACKNOWLEDGE packets in response to DATA packets */
-		init_packet(&odata, MT_PTYPE_ACK, srcmac, dstmac, sessionkey, pkt->counter + (data_len - MT_HEADER_LEN));
+		init_packet(&odata, MT_PTYPE_ACK, &srcmac, &dstmac, sessionkey, pkt->counter + (data_len - MT_HEADER_LEN));
 		send_udp(&odata, 0);
 
 		/* Accept first packet, and all packets greater than incounter, and if counter has
@@ -275,7 +275,7 @@ static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 			 * Authentication is handled by tunneled SSH Client and Server.
 			 */
 			else if (tunnel_conn && cpkt.cptype == MT_CPTYPE_ENCRYPTIONKEY) {
-				fprintf(stderr, "Server %s does not seem to use MAC-SSH Protocol. Please Try using MAC-Telnet instead.\n", ether_ntoa((struct ether_addr *)dstmac));
+				fprintf(stderr, "Server %s does not seem to use MAC-SSH Protocol. Please Try using MAC-Telnet instead.\n", ether_ntoa(&dstmac));
 				exit(1);
 			}
 
@@ -300,7 +300,7 @@ static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 			else if (!tunnel_conn && cpkt.cptype == MT_CPTYPE_END_AUTH) {
 
 				if (!sent_auth) {
-					fprintf(stderr, "Server %s does not seem to use MAC-Telnet Protocol. Please Try using MAC-SSH instead.\n", ether_ntoa((struct ether_addr *)dstmac));
+					fprintf(stderr, "Server %s does not seem to use MAC-Telnet Protocol. Please Try using MAC-SSH instead.\n", ether_ntoa(&dstmac));
 					exit(1);
 				}
 
@@ -334,7 +334,7 @@ static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 		struct mt_packet odata;
 
 		/* Acknowledge the disconnection by sending a END packet in return */
-		init_packet(&odata, MT_PTYPE_END, srcmac, dstmac, pkt->seskey, 0);
+		init_packet(&odata, MT_PTYPE_END, &srcmac, &dstmac, pkt->seskey, 0);
 		send_udp(&odata, 0);
 
 		if (!quiet_mode) {
@@ -344,7 +344,7 @@ static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len) {
 		/* exit */
 		running = 0;
 	} else {
-		fprintf(stderr, "Unhandeled packet type: %d received from server %s\n", pkt->ptype, ether_ntoa((struct ether_addr *)dstmac));
+		fprintf(stderr, "Unhandeled packet type: %d received from server %s\n", pkt->ptype, ether_ntoa(&dstmac));
 		return -1;
 	}
 
@@ -369,7 +369,7 @@ static int find_interface() {
 
 		/* Initialize receiving socket on the device chosen */
 		myip.sin_family = AF_INET;
-		memcpy((void *)&myip.sin_addr, iface->ipv4_addr, IPV4_ALEN);
+		myip.sin_addr = iface->ipv4_addr;
 		myip.sin_port = htons(sourceport);
 
 		/* Initialize socket and bind to udp port */
@@ -387,11 +387,11 @@ static int find_interface() {
 
 		/* Set the global socket handle and source mac address for send_udp() */
 		send_socket = testsocket;
-		memcpy(srcmac, iface->mac_addr, ETH_ALEN);
+		srcmac = iface->mac_addr;
 		active_interface = iface;
 
 		/* Send a SESSIONSTART message with the current device */
-		init_packet(&data, MT_PTYPE_SESSIONSTART, srcmac, dstmac, sessionkey, 0);
+		init_packet(&data, MT_PTYPE_SESSIONSTART, &srcmac, &dstmac, sessionkey, 0);
 		send_udp(&data, 0);
 
 		timeout.tv_sec = connect_timeout;
@@ -418,8 +418,8 @@ int main (int argc, char **argv) {
 	struct mt_packet data;
 	struct mt_mactelnet_hdr hdr = { };
 	struct sockaddr_in si_me;
-	unsigned char print_help = 0, have_username = 0, have_password = 0;
-	unsigned char drop_priv = 0;
+	uint8_t print_help = 0, have_username = 0, have_password = 0;
+	uint8_t drop_priv = 0;
 	int c;
 	int optval = 1;
 
@@ -628,7 +628,7 @@ int main (int argc, char **argv) {
 	setsockopt(insockfd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof (optval));
 
 	/* Get mac-address from string, or check for hostname via mndp */
-	if (!query_mndp_or_mac(argv[optind], dstmac, !quiet_mode)) {
+	if (!query_mndp_or_mac(argv[optind], &dstmac, !quiet_mode)) {
 		/* No valid mac address found, abort */
 		return 1;
 	}
@@ -702,7 +702,7 @@ int main (int argc, char **argv) {
 			/* Wait for remote terminal client connection on server port. */
 			fprintf(stderr, "Waiting for tunnel connection on port: %d\n", fwdport);
 			struct sockaddr_in cli_socket;
-			unsigned int cli_socket_len = sizeof(cli_socket);
+			uint32_t cli_socket_len = sizeof(cli_socket);
 			memset(&cli_socket, 0, sizeof(cli_socket));
 			if ((fwdfd = accept(fwdsrvfd, (struct sockaddr *) &cli_socket, &cli_socket_len)) < 0) {
 				perror("fwdfd");
@@ -755,7 +755,7 @@ int main (int argc, char **argv) {
 	setvbuf(stdout, (char*)NULL, _IONBF, 0);
 
 	if (!quiet_mode) {
-		printf("Connecting to %s...", ether_ntoa((struct ether_addr *)dstmac));
+		printf("Connecting to %s...", ether_ntoa(&dstmac));
 	}
 
 	/* Initialize receiving socket on the device chosen */
@@ -780,7 +780,7 @@ int main (int argc, char **argv) {
 	/* Handle first received packet */
 	handle_packet(&hdr, result);
 
-	init_packet(&data, MT_PTYPE_DATA, srcmac, dstmac, sessionkey, 0);
+	init_packet(&data, MT_PTYPE_DATA, &srcmac, &dstmac, sessionkey, 0);
 	outcounter +=  add_control_packet(&data, MT_CPTYPE_BEGINAUTH, NULL, 0);
 
 	/* TODO: handle result of send_udp */
@@ -820,7 +820,7 @@ int main (int argc, char **argv) {
 				if (result > 0)
 					handle_packet(&hdr, result);
 			}
-			unsigned char keydata[512];
+			uint8_t keydata[512];
 			int datalen = 0;
 			/* Handle data from keyboard/local terminal */
 			if (!tunnel_conn && FD_ISSET(0, &read_fds) && terminal_mode) {
@@ -832,7 +832,7 @@ int main (int argc, char **argv) {
 			}
 			if (datalen > 0) {
 				/* Data received, transmit to server */
-				init_packet(&data, MT_PTYPE_DATA, srcmac, dstmac, sessionkey, outcounter);
+				init_packet(&data, MT_PTYPE_DATA, &srcmac, &dstmac, sessionkey, outcounter);
 				add_control_packet(&data, MT_CPTYPE_PLAINDATA, &keydata, datalen);
 				outcounter += datalen;
 				send_udp(&data, 1);
@@ -846,7 +846,7 @@ int main (int argc, char **argv) {
 			   of inactivity  */
 			if (keepalive_counter++ == 10) {
 				struct mt_packet odata;
-				init_packet(&odata, MT_PTYPE_ACK, srcmac, dstmac, sessionkey, outcounter);
+				init_packet(&odata, MT_PTYPE_ACK, &srcmac, &dstmac, sessionkey, outcounter);
 				send_udp(&odata, 0);
 			}
 		}

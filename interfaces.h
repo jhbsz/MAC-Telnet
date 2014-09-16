@@ -24,8 +24,8 @@
 
 struct net_interface {
 	char name[IFNAMSIZ];
-	unsigned char ipv4_addr[IPV4_ALEN];
-	unsigned char mac_addr[ETH_ALEN];
+	struct in_addr ipv4_addr;
+	struct ether_addr mac_addr;
 	int ifindex;
 
 	struct list_head list;
@@ -33,14 +33,14 @@ struct net_interface {
 
 
 extern int net_init_raw_socket();
-extern int net_send_udp(const int socket, struct net_interface *interface, const unsigned char *sourcemac, const unsigned char *destmac, const struct in_addr *sourceip, const int sourceport, const struct in_addr *destip, const int destport, const unsigned char *data, const int datalen);
-extern unsigned short in_cksum(unsigned short *addr, int len);
+extern int net_send_udp(const int socket, struct net_interface *interface, const struct ether_addr *sourcemac, const struct ether_addr *destmac, const struct in_addr *sourceip, const int sourceport, const struct in_addr *destip, const int destport, const uint8_t *data, const int datalen);
+extern uint16_t in_cksum(uint16_t *addr, int len);
 
 extern struct list_head ifaces;
 
 void net_ifaces_init(void);
 struct net_interface *net_ifaces_add(const char *ifname);
-struct net_interface *net_ifaces_lookup(const unsigned char *mac);
+struct net_interface *net_ifaces_lookup(const struct ether_addr *mac);
 void net_ifaces_finish(void);
 void net_ifaces_all(void);
 

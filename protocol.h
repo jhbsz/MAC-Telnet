@@ -85,75 +85,75 @@ enum mt_mndp_attrtype {
 
 /* MNDP packet header */
 struct mt_mndp_hdr {
-	unsigned char version;
-	unsigned char ttl;
-	unsigned short cksum;
+	uint8_t version;
+	uint8_t ttl;
+	uint16_t cksum;
 };
 
 struct mt_mactelnet_hdr {
-	unsigned char ver;
+	uint8_t ver;
 	enum mt_ptype ptype;
-	unsigned char clienttype[2];
-	unsigned char srcaddr[6];
-	unsigned char dstaddr[6];
-	unsigned short seskey;
-	unsigned int counter;
-	unsigned char *data;
+	uint8_t clienttype[2];
+	struct ether_addr srcaddr;
+	struct ether_addr dstaddr;
+	uint16_t seskey;
+	uint32_t counter;
+	uint8_t *data;
 };
 
 struct mt_mactelnet_control_hdr {
 	enum mt_cptype cptype;
-	unsigned int length;
-	unsigned char *data;
+	uint32_t length;
+	uint8_t *data;
 };
 
 /* TODO: Add all the other information obtainable from mndp */
 struct mt_mndp_info {
 	struct mt_mndp_hdr header;
-	unsigned char address[ETH_ALEN];
+	uint8_t address[ETH_ALEN];
 	char identity[MT_MNDP_MAX_STRING_LENGTH];
 	char version[MT_MNDP_MAX_STRING_LENGTH];
 	char platform[MT_MNDP_MAX_STRING_LENGTH];
 	char hardware[MT_MNDP_MAX_STRING_LENGTH];
 	char softid[MT_MNDP_MAX_STRING_LENGTH];
 	char ifname[MT_MNDP_MAX_STRING_LENGTH];
-	unsigned int uptime;
+	uint32_t uptime;
 };
 
 struct mt_packet {
 	int size;
-	unsigned char data[MT_PACKET_LEN];
+	uint8_t data[MT_PACKET_LEN];
 };
 
 /* MacTelnet/Winbox packets */
-extern int init_packet(struct mt_packet *packet, enum mt_ptype ptype, unsigned char *srcmac, unsigned char *dstmac, unsigned short sessionkey, unsigned int counter);
+extern int init_packet(struct mt_packet *packet, enum mt_ptype ptype, struct ether_addr *srcmac, struct ether_addr *dstmac, uint16_t sessionkey, uint32_t counter);
 extern int add_control_packet(struct mt_packet *packet, enum mt_cptype cptype, void *cpdata, int data_len);
-extern void parse_packet(unsigned char *data, struct mt_mactelnet_hdr *pkthdr);
-extern int parse_control_packet(unsigned char *data, int data_len, struct mt_mactelnet_control_hdr *cpkthdr);
+extern void parse_packet(uint8_t *data, struct mt_mactelnet_hdr *pkthdr);
+extern int parse_control_packet(uint8_t *data, int data_len, struct mt_mactelnet_control_hdr *cpkthdr);
 
 /* MAC-Ping packets */
-int init_pingpacket(struct mt_packet *packet, unsigned char *srcmac, unsigned char *dstmac);
-int init_pongpacket(struct mt_packet *packet, unsigned char *srcmac, unsigned char *dstmac);
-int add_packetdata(struct mt_packet *packet, unsigned char *data, unsigned short length);
+int init_pingpacket(struct mt_packet *packet, struct ether_addr *srcmac, struct ether_addr *dstmac);
+int init_pongpacket(struct mt_packet *packet, struct ether_addr *srcmac, struct ether_addr *dstmac);
+int add_packetdata(struct mt_packet *packet, uint8_t *data, uint16_t length);
 
 /* MNDP packets */
-extern int mndp_init_packet(struct mt_packet *packet, unsigned char version, unsigned char ttl);
-extern int mndp_add_attribute(struct mt_packet *packet, enum mt_mndp_attrtype attrtype, void *attrdata, unsigned short data_len);
+extern int mndp_init_packet(struct mt_packet *packet, uint8_t version, uint8_t ttl);
+extern int mndp_add_attribute(struct mt_packet *packet, enum mt_mndp_attrtype attrtype, void *attrdata, uint16_t data_len);
 
-extern struct mt_mndp_info *parse_mndp(const unsigned char *data, const int packet_len);
-int query_mndp(const char *identity, unsigned char *mac);
-int query_mndp_or_mac(char *address, unsigned char *dstmac, int verbose);
+extern struct mt_mndp_info *parse_mndp(const uint8_t *data, const int packet_len);
+int query_mndp(const char *identity, struct ether_addr *mac);
+int query_mndp_or_mac(char *address, struct ether_addr *dstmac, int verbose);
 
 /* Number of milliseconds between each retransmission */
 #define MAX_RETRANSMIT_INTERVALS 9
 static const int retransmit_intervals[MAX_RETRANSMIT_INTERVALS] = { 15, 20, 30, 50, 90, 170, 330, 660, 1000 };
 
 /* Control packet magic header */
-static const unsigned char mt_mactelnet_cpmagic[4] = { 0x56, 0x34, 0x12, 0xff };
-static const unsigned char mt_mactelnet_clienttype[2] = { 0x00, 0x15 };
+static const uint8_t mt_mactelnet_cpmagic[4] = { 0x56, 0x34, 0x12, 0xff };
+static const uint8_t mt_mactelnet_clienttype[2] = { 0x00, 0x15 };
 
 /* Must be initialized by application */
-extern unsigned char mt_direction_fromserver;
+extern uint8_t mt_direction_fromserver;
 
 
 #endif

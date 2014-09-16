@@ -78,7 +78,7 @@ static int fwdport = MT_TUNNEL_SERVER_PORT;
 static time_t last_mndp_time = 0;
 
 /* Protocol data direction */
-unsigned char mt_direction_fromserver = 1;
+uint8_t mt_direction_fromserver = 1;
 
 /* Anti-timeout is every 10 seconds. Give up after 15. */
 #define MT_CONNECTION_TIMEOUT 15
@@ -95,18 +95,18 @@ struct mt_connection {
 	struct net_interface *interface;
 	char interface_name[IFNAMSIZ];
 
-	unsigned short seskey;
-	unsigned int incounter;
-	unsigned int outcounter;
+	uint16_t seskey;
+	uint32_t incounter;
+	uint32_t outcounter;
 
 	enum mt_connection_state state;
 	int wait_for_ack;
 
-	unsigned char srcip[IPV4_ALEN];
-	unsigned char srcmac[ETH_ALEN];
-	unsigned short srcport;
-	unsigned char dstmac[ETH_ALEN];
-	unsigned char enckey[16];
+	uint8_t srcip[IPV4_ALEN];
+	struct ether_addr srcmac;
+	uint16_t srcport;
+	struct ether_addr dstmac;
+	uint8_t enckey[16];
 
 #ifdef TELNET_SUPPORT
 	int have_enckey;
@@ -114,9 +114,9 @@ struct mt_connection {
 	char username[30];
 	int terminal_mode;
 	char terminal_type[30];
-	unsigned char trypassword[17];
-	unsigned short terminal_width;
-	unsigned short terminal_height;
+	uint8_t trypassword[17];
+	uint16_t terminal_width;
+	uint16_t terminal_height;
 #endif
 
 	struct list_head list;
@@ -146,35 +146,36 @@ static void list_remove_connection(struct mt_connection *conn) {
 	free(conn);
 }
 
-static struct mt_connection *list_find_connection(unsigned short seskey, unsigned char *srcmac) {
+static struct mt_connection *list_find_connection(uint16_t seskey, struct ether_addr *srcmac) {
 	struct mt_connection *p;
 
 	list_for_each_entry(p, &connections, list)
-		if (p->seskey == seskey && memcmp(srcmac, p->srcmac, ETH_ALEN) == 0)
+		if (p->seskey == seskey && memcmp(srcmac, &p->srcmac, ETH_ALEN) == 0)
 			return p;
 
 	return NULL;
 }
 
 static int send_udp(const struct mt_connection *conn, const struct mt_packet *packet) {
-	return net_send_udp(sockfd, conn->interface, conn->dstmac, conn->srcmac, &sourceip, MT_MACTELNET_PORT, &destip, conn->srcport, packet->data, packet->size);
+	return net_send_udp(sockfd, conn->interface, &conn->dstmac, &conn->srcmac, &sourceip, MT_MACTELNET_PORT, &destip, conn->srcport, packet->data, packet->size);
 }
 
-static int send_special_udp(struct net_interface *interface, unsigned short port, const struct mt_packet *packet) {
-	unsigned char dstmac[ETH_ALEN] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-	return net_send_udp(sockfd, interface, interface->mac_addr, dstmac, (const struct in_addr *)&interface->ipv4_addr, port, &destip, port, packet->data, packet->size);
+static int send_special_udp(struct net_interface *interface, uint16_t port, const struct mt_packet *packet) {
+	struct ether_addr dstmac;
+	memset(&dstmac, 0xFF, ETH_ALEN);
+	return net_send_udp(sockfd, interface, &interface->mac_addr, &dstmac, &interface->ipv4_addr, port, &destip, port, packet->data, packet->size);
 }
 
 static void abort_connection(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, char *message) {
 	struct mt_packet pdata;
 
-	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+	init_packet(&pdata, MT_PTYPE_DATA, &pkthdr->dstaddr, &pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, message, strlen(message));
 	send_udp(curconn, &pdata);
 
 	/* Make connection time out; lets the previous message get acked before disconnecting */
 	curconn->state = STATE_CLOSED;
-	init_packet(&pdata, MT_PTYPE_END, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+	init_packet(&pdata, MT_PTYPE_END, &pkthdr->dstaddr, &pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	send_udp(curconn, &pdata);
 }
 
@@ -194,7 +195,7 @@ static void display_banner() {
 
 static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr) {
 	struct mt_packet pdata;
-	unsigned char md5sum[17];
+	uint8_t md5sum[17];
 	char md5data[100];
 	struct mt_credentials *user;
 	char *slavename;
@@ -215,7 +216,7 @@ static void user_login(struct mt_connection *curconn, struct mt_mactelnet_hdr *p
 		md5_end(md5sum + 1, &md5);
 		md5sum[0] = 0;
 
-		init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+		init_packet(&pdata, MT_PTYPE_DATA, &pkthdr->dstaddr, &pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 		curconn->outcounter += add_control_packet(&pdata, MT_CPTYPE_END_AUTH, NULL, 0);
 		send_udp(curconn, &pdata);
 
@@ -334,7 +335,7 @@ static void setup_tunnel(struct mt_connection *curconn, struct mt_mactelnet_hdr 
 	char port[sizeof("65535\0")];
 	int optval = 1;
 
-	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+	init_packet(&pdata, MT_PTYPE_DATA, &pkthdr->dstaddr, &pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	curconn->outcounter += add_control_packet(&pdata, MT_CPTYPE_END_AUTH, NULL, 0);
 	send_udp(curconn, &pdata);
 
@@ -376,7 +377,7 @@ static void send_challange(struct mt_connection *curconn, struct mt_mactelnet_hd
 		memset(curconn->trypassword, 0, sizeof(curconn->trypassword));
 	}
 
-	init_packet(&pdata, MT_PTYPE_DATA, pkthdr->dstaddr, pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
+	init_packet(&pdata, MT_PTYPE_DATA, &pkthdr->dstaddr, &pkthdr->srcaddr, pkthdr->seskey, curconn->outcounter);
 	curconn->outcounter += add_control_packet(&pdata, MT_CPTYPE_ENCRYPTIONKEY, (curconn->enckey), 16);
 
 	send_udp(curconn, &pdata);
@@ -385,15 +386,15 @@ static void send_challange(struct mt_connection *curconn, struct mt_mactelnet_hd
 
 static void handle_data_packet(struct mt_connection *curconn, struct mt_mactelnet_hdr *pkthdr, int data_len) {
 	struct mt_mactelnet_control_hdr cpkt;
-	unsigned char *data = pkthdr->data;
+	uint8_t *data = pkthdr->data;
 	int success;
 
 #ifdef TELNET_SUPPORT
 	int got_user_packet = 0;
 	int got_pass_packet = 0;
 	int got_size_packet = 0;
-	unsigned short width;
-	unsigned short height;
+	uint16_t width;
+	uint16_t height;
 #endif
 
 	/* Parse first control packet */
@@ -494,7 +495,7 @@ require_ssh:
 	abort_connection(curconn, pkthdr, "The server does not support standard MAC-Telnet Protocol. Please try using MAC-SSH instead.\r\n");
 }
 
-static void recv_bulk(struct uloop_fd *ufd, unsigned int ev);
+static void recv_bulk(struct uloop_fd *ufd, uint32_t ev);
 static void timeout_session(struct uloop_timeout *utm);
 
 static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src, int data_len) {
@@ -503,7 +504,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 	struct net_interface *iface;
 
 	/* Drop packets not belonging to us */
-	if ((iface = net_ifaces_lookup(pkt->dstaddr)) == NULL)
+	if ((iface = net_ifaces_lookup(&pkt->dstaddr)) == NULL)
 		return;
 
 	switch (pkt->ptype)
@@ -512,7 +513,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			if (pings++ > MT_MAXPPS)
 				break;
 
-			init_pongpacket(&pdata, (unsigned char *)&(pkt->dstaddr), (unsigned char *)&(pkt->srcaddr));
+			init_pongpacket(&pdata, &pkt->dstaddr, &pkt->srcaddr);
 			add_packetdata(&pdata, pkt->data - 4, data_len - (MT_HEADER_LEN - 4));
 			send_special_udp(iface, MT_MACTELNET_PORT, &pdata);
 			break;
@@ -528,10 +529,10 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			curconn->state = STATE_AUTH;
 			curconn->interface = iface;
 			strncpy(curconn->interface_name, iface->name, sizeof(curconn->interface_name) - 1);
-			memcpy(curconn->srcmac, pkt->srcaddr, ETH_ALEN);
+			curconn->srcmac = pkt->srcaddr;
 			memcpy(curconn->srcip, &(src->sin_addr), IPV4_ALEN);
 			curconn->srcport = htons(src->sin_port);
-			memcpy(curconn->dstmac, pkt->dstaddr, ETH_ALEN);
+			curconn->dstmac = pkt->dstaddr;
 
 			curconn->socket.cb = recv_bulk;
 			curconn->timeout.cb = timeout_session;
@@ -539,17 +540,17 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			list_add_tail(&curconn->list, &connections);
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
-			init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
+			init_packet(&pdata, MT_PTYPE_ACK, &pkt->dstaddr, &pkt->srcaddr, pkt->seskey, pkt->counter);
 			send_udp(curconn, &pdata);
 			break;
 
 		case MT_PTYPE_END:
-			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
+			curconn = list_find_connection(pkt->seskey, &pkt->srcaddr);
 			if (!curconn)
 				break;
 
 			if (curconn->state != STATE_CLOSED) {
-				init_packet(&pdata, MT_PTYPE_END, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
+				init_packet(&pdata, MT_PTYPE_END, &pkt->dstaddr, &pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 			syslog(LOG_DEBUG, "(%d) Connection closed.", curconn->seskey);
@@ -557,7 +558,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			return;
 
 		case MT_PTYPE_ACK:
-			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
+			curconn = list_find_connection(pkt->seskey, &pkt->srcaddr);
 			if (!curconn)
 				break;
 
@@ -567,7 +568,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 
 			if (uloop_timeout_remaining(&curconn->timeout) > 9000) {
 				// Answer to anti-timeout packet
-				init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
+				init_packet(&pdata, MT_PTYPE_ACK, &pkt->dstaddr, &pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 
@@ -575,14 +576,14 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			return;
 
 		case MT_PTYPE_DATA:
-			curconn = list_find_connection(pkt->seskey, (unsigned char *)&(pkt->srcaddr));
+			curconn = list_find_connection(pkt->seskey, &pkt->srcaddr);
 			if (!curconn)
 				break;
 
 			uloop_timeout_set(&curconn->timeout, MT_CONNECTION_TIMEOUT * 1000);
 
 			/* ack the data packet */
-			init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter + (data_len - MT_HEADER_LEN));
+			init_packet(&pdata, MT_PTYPE_ACK, &pkt->dstaddr, &pkt->srcaddr, pkt->seskey, pkt->counter + (data_len - MT_HEADER_LEN));
 			send_udp(curconn, &pdata);
 
 			/* Accept first packet, and all packets greater than incounter, and if counter has
@@ -600,7 +601,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 		default:
 			if (curconn) {
 				syslog(LOG_WARNING, "(%d) Unhandeled packet type: %d", curconn->seskey, pkt->ptype);
-				init_packet(&pdata, MT_PTYPE_ACK, pkt->dstaddr, pkt->srcaddr, pkt->seskey, pkt->counter);
+				init_packet(&pdata, MT_PTYPE_ACK, &pkt->dstaddr, &pkt->srcaddr, pkt->seskey, pkt->counter);
 				send_udp(curconn, &pdata);
 			}
 		}
@@ -616,7 +617,7 @@ static void print_version() {
 void mndp_broadcast(struct uloop_timeout *utm) {
 	struct mt_packet pdata;
 	struct utsname s_uname;
-	unsigned int uptime;
+	uint32_t uptime;
 	struct sysinfo s_sysinfo;
 	struct net_interface *iface;
 	struct mt_mndp_hdr *header;
@@ -637,7 +638,7 @@ void mndp_broadcast(struct uloop_timeout *utm) {
 		header = (struct mt_mndp_hdr *)&(pdata.data);
 
 		mndp_init_packet(&pdata, 0, 1);
-		mndp_add_attribute(&pdata, MT_MNDPTYPE_ADDRESS, iface->mac_addr, ETH_ALEN);
+		mndp_add_attribute(&pdata, MT_MNDPTYPE_ADDRESS, &iface->mac_addr, ETH_ALEN);
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_IDENTITY, s_uname.nodename, strlen(s_uname.nodename));
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_VERSION, s_uname.release, strlen(s_uname.release));
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_PLATFORM, PLATFORM_NAME, strlen(PLATFORM_NAME));
@@ -652,7 +653,7 @@ void mndp_broadcast(struct uloop_timeout *utm) {
 			mndp_add_attribute(&pdata, MT_MNDPTYPE_SOFTID, MT_SOFTID_MACSSH, strlen(MT_SOFTID_MACSSH));
 
 		mndp_add_attribute(&pdata, MT_MNDPTYPE_IFNAME, iface->name, strlen(iface->name));
-		header->cksum = in_cksum((unsigned short *)&(pdata.data), pdata.size);
+		header->cksum = in_cksum((uint16_t *)&(pdata.data), pdata.size);
 		send_special_udp(iface, MT_MNDP_PORT, &pdata);
 	}
 
@@ -670,11 +671,11 @@ void sigterm_handler() {
 
 	list_for_each_entry(p, &connections, list) {
 		if (p->state == STATE_ACTIVE) {
-			init_packet(&pdata, MT_PTYPE_DATA, p->interface->mac_addr, p->srcmac, p->seskey, p->outcounter);
+			init_packet(&pdata, MT_PTYPE_DATA, &p->interface->mac_addr, &p->srcmac, p->seskey, p->outcounter);
 			add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, message, strlen(message));
 			send_udp(p, &pdata);
 
-			init_packet(&pdata, MT_PTYPE_END, p->interface->mac_addr, p->srcmac, p->seskey, p->outcounter);
+			init_packet(&pdata, MT_PTYPE_END, &p->interface->mac_addr, &p->srcmac, p->seskey, p->outcounter);
 			send_udp(p, &pdata);
 		}
 	}
@@ -711,7 +712,7 @@ void sighup_handler() {
 	net_ifaces_finish();
 }
 
-static void recv_telnet(struct uloop_fd *ufd, unsigned int ev)
+static void recv_telnet(struct uloop_fd *ufd, uint32_t ev)
 {
 	struct sockaddr_in src = { };
 	struct mt_mactelnet_hdr hdr = { };
@@ -724,7 +725,7 @@ static void recv_telnet(struct uloop_fd *ufd, unsigned int ev)
 	handle_packet(&hdr, &src, len);
 }
 
-static void recv_mndp(struct uloop_fd *ufd, unsigned int ev)
+static void recv_mndp(struct uloop_fd *ufd, uint32_t ev)
 {
 	int len = net_recv_packet(ufd->fd, NULL, NULL);
 
@@ -739,11 +740,11 @@ static void recv_mndp(struct uloop_fd *ufd, unsigned int ev)
 	time(&last_mndp_time);
 }
 
-static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)
+static void recv_bulk(struct uloop_fd *ufd, uint32_t ev)
 {
 	struct mt_connection *p = container_of(ufd, struct mt_connection, socket);
 	struct mt_packet pdata;
-	unsigned char keydata[1024];
+	uint8_t keydata[1024];
 	int datalen,plen;
 
 	/* Read it */
@@ -751,14 +752,14 @@ static void recv_bulk(struct uloop_fd *ufd, unsigned int ev)
 
 	if (datalen > 0) {
 		/* Send it */
-		init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+		init_packet(&pdata, MT_PTYPE_DATA, &p->dstmac, &p->srcmac, p->seskey, p->outcounter);
 		plen = add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, &keydata, datalen);
 		p->outcounter += plen;
 		p->wait_for_ack = 1;
 		send_udp(p, &pdata);
 	} else {
 		/* Shell exited */
-		init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+		init_packet(&pdata, MT_PTYPE_END, &p->dstmac, &p->srcmac, p->seskey, p->outcounter);
 		send_udp(p, &pdata);
 		if (tunnel_conn) {
 			syslog(LOG_INFO, "(%d) Connection to server closed.", p->seskey);
@@ -781,11 +782,11 @@ static void timeout_session(struct uloop_timeout *utm)
 	struct mt_connection *p = container_of(utm, struct mt_connection, timeout);
 
 	syslog(LOG_INFO, "(%d) Session timed out", p->seskey);
-	init_packet(&pdata, MT_PTYPE_DATA, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+	init_packet(&pdata, MT_PTYPE_DATA, &p->dstmac, &p->srcmac, p->seskey, p->outcounter);
 	/*_ Please include both \r and \n in translation, this is needed for the terminal emulator. */
 	add_control_packet(&pdata, MT_CPTYPE_PLAINDATA, "Timeout\r\n", 9);
 	send_udp(p, &pdata);
-	init_packet(&pdata, MT_PTYPE_END, p->dstmac, p->srcmac, p->seskey, p->outcounter);
+	init_packet(&pdata, MT_PTYPE_END, &p->dstmac, &p->srcmac, p->seskey, p->outcounter);
 	send_udp(p, &pdata);
 
 	list_remove_connection(p);
@@ -799,7 +800,7 @@ int main (int argc, char **argv) {
 	int print_help = 0;
 	int foreground = 0;
 	char port[sizeof("65535\0")];
-	unsigned char drop_priv = 0;
+	uint8_t drop_priv = 0;
 	struct net_interface *iface;
 	struct uloop_timeout mndpintv = { };
 	struct uloop_fd insock = { }, mndpsock = { };
@@ -850,7 +851,7 @@ int main (int argc, char **argv) {
 					fprintf(stderr, "No such interface: %s\n", optarg);
 				else
 					syslog(LOG_NOTICE, "Listening on %s for %s\n",
-						   iface->name, ether_ntoa(iface->mac_addr));
+						   iface->name, ether_ntoa(&iface->mac_addr));
 				break;
 		}
 	}

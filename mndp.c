@@ -30,7 +30,7 @@
 #ifndef FROM_MACTELNET
 
 /* Protocol data direction, not used here, but obligatory for protocol.c */
-unsigned char mt_direction_fromserver = 0;
+uint8_t mt_direction_fromserver = 0;
 
 int main(int argc, char **argv)  {
 	int batch_mode = 0;
@@ -46,7 +46,7 @@ int mndp(int timeout, int batch_mode)  {
 	int sock,result;
 	int optval = 1;
 	struct sockaddr_in si_me, si_remote;
-	unsigned char buff[MT_PACKET_LEN];
+	uint8_t buff[MT_PACKET_LEN];
 
 #ifdef FROM_MACTELNET
 	/* mactelnet.c has this set to 1 */
@@ -79,7 +79,7 @@ int mndp(int timeout, int batch_mode)  {
 		fprintf(stderr, "Unable to send broadcast packets: Operating in receive only mode.\n");
 	} else {
 		/* Request routers identify themselves */
-		unsigned int message = 0;
+		uint32_t message = 0;
 
 		memset((char *) &si_remote, 0, sizeof(si_remote));
 		si_remote.sin_family = AF_INET;

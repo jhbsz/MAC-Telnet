@@ -16,7 +16,7 @@
     with this program; if not, write to the Free Software Foundation, Inc.,
     51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-extern int get_terminal_size(unsigned short *width, unsigned short *height);
+extern int get_terminal_size(uint16_t *width, uint16_t *height);
 extern int raw_term();
 extern int reset_term();
-extern int set_terminal_size(int fd, unsigned short width, unsigned short height);
+extern int set_terminal_size(int fd, uint16_t width, uint16_t height);

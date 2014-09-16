@@ -38,14 +38,14 @@
 LIST_HEAD(ifaces);
 
 static struct ifaddrs *ifas;
-static unsigned char packetbuf[1500];
+static uint8_t packetbuf[1500];
 
-unsigned short in_cksum(unsigned short *addr, int len)
+uint16_t in_cksum(uint16_t *addr, int len)
 {
 	int nleft = len;
 	int sum = 0;
-	unsigned short *w = addr;
-	unsigned short answer = 0;
+	uint16_t *w = addr;
+	uint16_t answer = 0;
 
 	while (nleft > 1) {
 		sum += *w++;
@@ -53,7 +53,7 @@ unsigned short in_cksum(unsigned short *addr, int len)
 	}
 
 	if (nleft == 1) {
-		*(unsigned char *) (&answer) = *(unsigned char *) w;
+		*(uint8_t *) (&answer) = *(uint8_t *) w;
 		sum += answer;
 	}
 
@@ -63,11 +63,11 @@ unsigned short in_cksum(unsigned short *addr, int len)
 	return (answer);
 }
 
-unsigned short udp_sum_calc(unsigned char *src_addr,unsigned char *dst_addr, unsigned char *data, unsigned short len) {
-	unsigned short prot_udp=17;
-	unsigned short padd=0;
-	unsigned short word16;
-	unsigned int sum = 0;
+uint16_t udp_sum_calc(uint8_t *src_addr,uint8_t *dst_addr, uint8_t *data, uint16_t len) {
+	uint16_t prot_udp=17;
+	uint16_t padd=0;
+	uint16_t word16;
+	uint32_t sum = 0;
 	int i;
 
 	/* Padding ? */
@@ -104,7 +104,7 @@ unsigned short udp_sum_calc(unsigned char *src_addr,unsigned char *dst_addr, uns
 	if (sum == 0)
 		sum = 0xFFFF;
 
-	return (unsigned short) sum;
+	return (uint16_t) sum;
 }
 
 int net_init_raw_socket(struct net_interface *interface) {
@@ -120,7 +120,7 @@ int net_init_raw_socket(struct net_interface *interface) {
 	return fd;
 }
 
-int net_send_udp(const int fd, struct net_interface *interface, const unsigned char *sourcemac, const unsigned char *destmac, const struct in_addr *sourceip, const int sourceport, const struct in_addr *destip, const int destport, const unsigned char *data, const int datalen) {
+int net_send_udp(const int fd, struct net_interface *interface, const struct ether_addr *sourcemac, const struct ether_addr *destmac, const struct in_addr *sourceip, const int sourceport, const struct in_addr *destip, const int destport, const uint8_t *data, const int datalen) {
 	struct sockaddr_ll socket_address;
 
 	/*
@@ -131,7 +131,7 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 	struct ethhdr *eh = (struct ethhdr *)buffer;
 	struct iphdr *ip = (struct iphdr *)(buffer + 14);
 	struct udphdr *udp = (struct udphdr *)(buffer + 14 + 20);
-	unsigned char *rest = (unsigned char *)(buffer + 20 + 14 + sizeof(struct udphdr));
+	uint8_t *rest = (uint8_t *)(buffer + 20 + 14 + sizeof(struct udphdr));
 
 	if (((void *)rest - (void*)buffer) + datalen  > ETH_FRAME_LEN) {
 		fprintf(stderr, "packet size too large\n");
@@ -139,7 +139,7 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 		return 0;
 	}
 
-	static unsigned int id = 1;
+	static uint32_t id = 1;
 	int send_result = 0;
 
 	/* Abort if we couldn't allocate enough memory */
@@ -179,7 +179,7 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 	ip->daddr = destip->s_addr;
 
 	/* Calculate checksum for IP header */
-	ip->check = in_cksum((unsigned short *)ip, sizeof(struct iphdr));
+	ip->check = in_cksum((uint16_t *)ip, sizeof(struct iphdr));
 
 	/* Init UDP Header */
 	udp->source = htons(sourceport);
@@ -191,7 +191,7 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 	memcpy(rest, data, datalen);
 
 	/* Add UDP checksum */
-	udp->check = udp_sum_calc((unsigned char *)&(ip->saddr), (unsigned char *)&(ip->daddr), (unsigned char *)udp, sizeof(struct udphdr) + datalen);
+	udp->check = udp_sum_calc((uint8_t *)&(ip->saddr), (uint8_t *)&(ip->daddr), (uint8_t *)udp, sizeof(struct udphdr) + datalen);
 	udp->check = htons(udp->check);
 
 	/* Send the packet */
@@ -212,7 +212,7 @@ int net_send_udp(const int fd, struct net_interface *interface, const unsigned c
 int net_recv_packet(int fd, struct mt_mactelnet_hdr *h, struct sockaddr_in *s)
 {
 	int result;
-	unsigned int slen = s ? sizeof(*s) : 0;
+	uint32_t slen = s ? sizeof(*s) : 0;
 
 	memset(packetbuf, 0, sizeof(packetbuf));
 
@@ -266,12 +266,12 @@ net_ifaces_add(const char *ifname)
 		case AF_PACKET:
 			sll = (struct sockaddr_ll *)ifa->ifa_addr;
 			iface->ifindex = sll->sll_ifindex;
-			memcpy(iface->mac_addr, &sll->sll_addr, sizeof(iface->mac_addr));
+			memcpy(&iface->mac_addr, &sll->sll_addr, sizeof(iface->mac_addr));
 			break;
 
 		case AF_INET:
 			sin = (struct sockaddr_in *)ifa->ifa_addr;
-			memcpy(iface->ipv4_addr, &sin->sin_addr, sizeof(iface->ipv4_addr));
+			iface->ipv4_addr = sin->sin_addr;
 			break;
 		}
 	}
@@ -289,12 +289,12 @@ net_ifaces_add(const char *ifname)
 }
 
 struct net_interface *
-net_ifaces_lookup(const unsigned char *mac)
+net_ifaces_lookup(const struct ether_addr *mac)
 {
 	struct net_interface *iface;
 
 	list_for_each_entry(iface, &ifaces, list)
-		if (!memcmp(iface->mac_addr, mac, sizeof(iface->mac_addr)))
+		if (!memcmp(&iface->mac_addr, mac, sizeof(iface->mac_addr)))
 			return iface;
 
 	return NULL;

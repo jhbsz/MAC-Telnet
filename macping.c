@@ -38,11 +38,11 @@
 
 static int sockfd, insockfd;
 
-static unsigned short ping_size = 38;
+static uint16_t ping_size = 38;
 
 static struct in_addr sourceip;
 static struct in_addr destip;
-static unsigned char dstmac[ETH_ALEN];
+static struct ether_addr dstmac;
 
 static int ping_sent = 0;
 static int pong_received = 0;
@@ -51,7 +51,7 @@ static float avg_ms = 0;
 static float max_ms = 0;
 
 /* Protocol data direction, not used here, but obligatory for protocol.c */
-unsigned char mt_direction_fromserver = 0;
+uint8_t mt_direction_fromserver = 0;
 
 static void print_version() {
 	fprintf(stderr, PROGRAM_NAME " " PROGRAM_VERSION "\n");
@@ -172,7 +172,7 @@ int main(int argc, char **argv)  {
 	}
 
 	/* Get mac-address from string, or check for hostname via mndp */
-	if (!query_mndp_or_mac(argv[optind], dstmac, 1)) {
+	if (!query_mndp_or_mac(argv[optind], &dstmac, 1)) {
 		/* No valid mac address found, abort */
 		return 1;
 	}
@@ -225,7 +225,7 @@ int main(int argc, char **argv)  {
 		int sent = 0;
 		int waitforpacket;
 		struct timeval timestamp;
-		unsigned char pingdata[1500];
+		uint8_t pingdata[1500];
 
 		gettimeofday(&timestamp, NULL);
 		memcpy(pingdata, &timestamp, sizeof(timestamp));
@@ -235,9 +235,9 @@ int main(int argc, char **argv)  {
 
 		list_for_each_entry(iface, &ifaces, list)
 		{
-			init_pingpacket(&packet, iface->mac_addr, dstmac);
+			init_pingpacket(&packet, &iface->mac_addr, &dstmac);
 			add_packetdata(&packet, pingdata, ping_size);
-			result = net_send_udp(sockfd, iface, iface->mac_addr, dstmac, &sourceip, MT_MACTELNET_PORT, &destip, MT_MACTELNET_PORT, packet.data, packet.size);
+			result = net_send_udp(sockfd, iface, &iface->mac_addr, &dstmac, &sourceip, MT_MACTELNET_PORT, &destip, MT_MACTELNET_PORT, packet.data, packet.size);
 
 			if (result > 0) {
 				sent++;
@@ -262,13 +262,13 @@ int main(int argc, char **argv)  {
 			reads = select(insockfd+1, &read_fds, NULL, NULL, &timeout);
 			if (reads <= 0) {
 				waitforpacket = 0;
-				fprintf(stderr, "%s ping timeout\n", ether_ntoa((struct ether_addr *)&dstmac));
+				fprintf(stderr, "%s ping timeout\n", ether_ntoa(&dstmac));
 				break;
 			}
 
-			unsigned char buff[1500];
+			uint8_t buff[1500];
 			struct sockaddr_in saddress;
-			unsigned int slen = sizeof(saddress);
+			uint32_t slen = sizeof(saddress);
 			struct mt_mactelnet_hdr pkthdr;
 
 			result = recvfrom(insockfd, buff, 1500, 0, (struct sockaddr *)&saddress, &slen);
