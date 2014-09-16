@@ -102,7 +102,7 @@ struct mt_connection {
 	enum mt_connection_state state;
 	int wait_for_ack;
 
-	uint8_t srcip[IPV4_ALEN];
+	struct in_addr srcip;
 	struct ether_addr srcmac;
 	uint16_t srcport;
 	struct ether_addr dstmac;
@@ -530,7 +530,7 @@ static void handle_packet(struct mt_mactelnet_hdr *pkt, struct sockaddr_in *src,
 			curconn->interface = iface;
 			strncpy(curconn->interface_name, iface->name, sizeof(curconn->interface_name) - 1);
 			curconn->srcmac = pkt->srcaddr;
-			memcpy(curconn->srcip, &(src->sin_addr), IPV4_ALEN);
+			curconn->srcip = src->sin_addr;
 			curconn->srcport = htons(src->sin_port);
 			curconn->dstmac = pkt->dstaddr;
 
