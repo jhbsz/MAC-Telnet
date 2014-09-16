@@ -110,7 +110,7 @@ struct mt_mactelnet_control_hdr {
 /* TODO: Add all the other information obtainable from mndp */
 struct mt_mndp_info {
 	struct mt_mndp_hdr header;
-	uint8_t address[ETH_ALEN];
+	struct ether_addr address;
 	char identity[MT_MNDP_MAX_STRING_LENGTH];
 	char version[MT_MNDP_MAX_STRING_LENGTH];
 	char platform[MT_MNDP_MAX_STRING_LENGTH];

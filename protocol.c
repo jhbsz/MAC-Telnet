@@ -328,7 +328,7 @@ struct mt_mndp_info *parse_mndp(const uint8_t *data, const int packet_len) {
 		switch (type) {
 			case MT_MNDPTYPE_ADDRESS:
 				if (len >= ETH_ALEN) {
-					memcpy(packet.address, p, ETH_ALEN);
+					memcpy(&packet.address, p, ETH_ALEN);
 				}
 				break;
 
@@ -471,7 +471,7 @@ int query_mndp(const char *identity, struct ether_addr *mac) {
 
 		if (packet != NULL) {
 			if (strcasecmp(identity, packet->identity) == 0) {
-				memcpy(mac, packet->address, ETH_ALEN);
+				*mac = packet->address;
 				close(sock);
 				return 1;
 			}
