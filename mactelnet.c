@@ -686,7 +686,7 @@ int main (int argc, char **argv) {
 		/* Fork child to execute SSH Client locally and connect to parent
 		 * waiting for connection from child if launch_ssh is requested.
 		 */
-		int pid;
+		int pid = 0;
 		if (launch_ssh) {
 			pid = fork();
 		}
