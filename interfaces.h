@@ -25,6 +25,7 @@
 struct net_interface {
 	char name[IFNAMSIZ];
 	struct in_addr ipv4_addr;
+	struct in_addr bcast_addr;
 	struct ether_addr mac_addr;
 	int ifindex;
 

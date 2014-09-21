@@ -272,6 +272,8 @@ net_ifaces_add(const char *ifname)
 		case AF_INET:
 			sin = (struct sockaddr_in *)ifa->ifa_addr;
 			iface->ipv4_addr = sin->sin_addr;
+			sin = (struct sockaddr_in *)ifa->ifa_broadaddr;
+			iface->bcast_addr = sin->sin_addr;
 			break;
 		}
 	}
