@@ -25,6 +25,7 @@
 #include <string.h>
 #include "protocol.h"
 #include "config.h"
+#include "interfaces.h"
 
 /* This file is also used for the -l option in mactelnet */
 #ifndef FROM_MACTELNET
@@ -46,6 +47,7 @@ int mndp(int timeout, int batch_mode)  {
 	int sock,result;
 	int optval = 1;
 	struct sockaddr_in si_me, si_remote;
+	struct net_interface *iface;
 	uint8_t buff[MT_PACKET_LEN];
 
 #ifdef FROM_MACTELNET
@@ -81,12 +83,16 @@ int mndp(int timeout, int batch_mode)  {
 		/* Request routers identify themselves */
 		uint32_t message = 0;
 
-		memset((char *) &si_remote, 0, sizeof(si_remote));
+		memset(&si_remote, 0, sizeof(si_remote));
 		si_remote.sin_family = AF_INET;
 		si_remote.sin_port = htons(MT_MNDP_PORT);
-		si_remote.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-		if (sendto (sock, &message, sizeof (message), 0, (struct sockaddr *)&si_remote, sizeof(si_remote))==-1) {
-			fprintf(stderr, "Unable to send broadcast packet: Operating in receive only mode.\n");
+
+		net_ifaces_all();
+		list_for_each_entry(iface, &ifaces, list)
+		{
+			si_remote.sin_addr = iface->bcast_addr;
+			sendto(sock, &message, sizeof(message), 0,
+			       (struct sockaddr *)&si_remote, sizeof(si_remote));
 		}
 	}
 

@@ -31,6 +31,7 @@
 #include <endian.h>
 #include "protocol.h"
 #include "config.h"
+#include "interfaces.h"
 
 int init_packet(struct mt_packet *packet, enum mt_ptype ptype, struct ether_addr *srcmac, struct ether_addr *dstmac, uint16_t sessionkey, uint32_t counter) {
 	uint8_t *data = packet->data;
@@ -395,7 +396,6 @@ struct mt_mndp_info *parse_mndp(const uint8_t *data, const int packet_len) {
 }
 
 int query_mndp(const char *identity, struct ether_addr *mac) {
-	int fastlookup = 0;
 	int sock, length;
 	int optval = 1;
 	struct sockaddr_in si_me, si_remote;
@@ -405,6 +405,7 @@ int query_mndp(const char *identity, struct ether_addr *mac) {
 	time_t start_time;
 	fd_set read_fds;
 	struct mt_mndp_info *packet;
+	struct net_interface *iface;
 
 	start_time = time(0);
 
@@ -434,25 +435,25 @@ int query_mndp(const char *identity, struct ether_addr *mac) {
 	memset((char *) &si_remote, 0, sizeof(si_remote));
 	si_remote.sin_family = AF_INET;
 	si_remote.sin_port = htons(MT_MNDP_PORT);
-	si_remote.sin_addr.s_addr = htonl(INADDR_BROADCAST);
 
-	if (sendto(sock, &message, sizeof(message), 0, (struct sockaddr *)&si_remote, sizeof(si_remote)) == -1) {
-		fprintf(stderr, "Unable to send broadcast packet: Router lookup will be slow\n");
-		fastlookup = 0;
-	} else {
-		fastlookup = 1;
+	net_ifaces_all();
+	list_for_each_entry(iface, &ifaces, list)
+	{
+		si_remote.sin_addr = iface->bcast_addr;
+		sendto(sock, &message, sizeof(message), 0,
+		       (struct sockaddr *)&si_remote, sizeof(si_remote));
 	}
 
 	while (1) {
 		/* Timeout, in case we receive a lot of packets, but from the wrong routers */
-		if (time(0) - start_time > (fastlookup ? MT_MNDP_TIMEOUT : MT_MNDP_LONGTIMEOUT)) {
+		if (time(0) - start_time > MT_MNDP_TIMEOUT) {
 			goto done;
 		}
 
 		FD_ZERO(&read_fds);
 		FD_SET(sock, &read_fds);
 
-		timeout.tv_sec = fastlookup ? MT_MNDP_TIMEOUT : MT_MNDP_LONGTIMEOUT;
+		timeout.tv_sec = MT_MNDP_TIMEOUT;
 		timeout.tv_usec = 0;
 
 		select(sock + 1, &read_fds, NULL, NULL, &timeout);

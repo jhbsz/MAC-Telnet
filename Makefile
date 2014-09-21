@@ -63,8 +63,8 @@ mactelnet: config.h mactelnet.c mactelnet.h protocol.o console.c console.h inter
 mactelnetd: config.h mactelnetd.c protocol.o interfaces.o console.c console.h users.o users.h
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -lubox -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o ${LIBS}
 
-mndp: config.h mndp.c protocol.o
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o ${LIBS}
+mndp: config.h mndp.c protocol.o interfaces.o
+	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o interfaces.o ${LIBS}
 
 macping: config.h macping.c interfaces.o protocol.o
 	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o macping macping.c interfaces.o protocol.o ${LIBS}
