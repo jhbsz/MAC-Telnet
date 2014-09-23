@@ -18,5 +18,3 @@
 */
 
 #define CONNECT_TIMEOUT 2
-
-#define SSH_PATH "/usr/bin/ssh"

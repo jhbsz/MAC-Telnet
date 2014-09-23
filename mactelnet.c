@@ -33,9 +33,12 @@
 #include <netinet/ether.h>
 #include <sys/time.h>
 #include <time.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <string.h>
+#include <limits.h>
+#include <pwd.h>
 #ifdef __LINUX__
 #include <linux/if_ether.h>
 #endif
@@ -97,12 +100,105 @@ uint8_t mt_direction_fromserver = 0;
 
 static uint32_t send_socket;
 
-/* SSH Executable Path */
-static char ssh_path[512];
+static const char *ssh_commands[2] = {
+	"dbclient -y -y -p %{port} -l %{user} 127.0.0.1",
+	"ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p %{port} -l %{user} 127.0.0.1"
+};
 
-/* SSH additional args. */
-static char **ssh_argv;
+static char * find_executable(const char *name)
+{
+	char c, *p, *sp;
+	struct stat s;
+	static char path[PATH_MAX];
 
+	if (!(p = sp = getenv("PATH")))
+		p = sp = "/bin:/usr/bin:/sbin:/usr/sbin";
+
+	do {
+		if (*p != ':' && *p != 0)
+			continue;
+
+		c = *p; *p = 0;
+		snprintf(path, sizeof(path) - 1, "%s/%s", sp, name);
+
+		if (!stat(path, &s) && S_ISREG(s.st_mode) && (s.st_mode & S_IXUSR))
+			return path;
+
+		sp = p + 1;
+		*p = c;
+	}
+	while (*p++);
+
+	return NULL;
+}
+
+static int exec_ssh(const char *user, int port, int add_argc, char **add_argv)
+{
+	int i, c, n;
+	const char *cmd;
+	struct passwd *pwd;
+	char *p, *s = NULL, **argv = NULL, portstr[sizeof("65535\0")];
+
+	if (add_argc < 0)
+		add_argc = 0;
+
+	if (!user || !*user)
+	{
+		if (!(pwd = getpwuid(getuid())))
+			return -1;
+
+		user = pwd->pw_name;
+	}
+
+	for (i = 0; i < sizeof(ssh_commands) / sizeof(ssh_commands[0]); i++)
+	{
+		if (!ssh_commands[i])
+			continue;
+
+		if (!(s = strdup(ssh_commands[i])))
+			goto skip;
+
+		for (c = 0, p = strtok(s, "\t "); p != NULL; p = strtok(NULL, "\t "))
+			c++;
+
+		free(s);
+
+		if (!(s = strdup(ssh_commands[i])))
+			goto skip;
+
+		if (!(argv = calloc(sizeof(*argv), c + add_argc + 1)))
+			goto skip;
+
+		argv[0] = strtok(s, "\t ");
+
+		if (!argv[0] || !(cmd = find_executable(argv[0])))
+			goto skip;
+
+		for (n = 1; n < c; n++)
+		{
+			argv[n] = strtok(NULL, "\t ");
+
+			if (!strcmp(argv[n], "%{user}"))
+				argv[n] = (char *)user;
+			else if (!strcmp(argv[n], "%{port}"))
+				sprintf(argv[n] = portstr, "%u", port);
+		}
+
+		for (c = 0; c < add_argc; c++)
+			argv[n + c] = add_argv[c];
+
+		return execv(cmd, argv);
+
+skip:
+		if (s)
+			free(s);
+
+		if (argv)
+			free(argv);
+	}
+
+	return -1;
+}
 
 static int handle_packet(struct mt_mactelnet_hdr *pkt, int data_len);
 
@@ -423,10 +519,6 @@ int main (int argc, char **argv) {
 	int c;
 	int optval = 1;
 
-	/* Set default for ssh_path. */
-	strncpy(ssh_path, SSH_PATH, sizeof(ssh_path) - 1);
-	ssh_path[sizeof(ssh_path) - 1] = '\0';
-
     /* Ignore args after -- for MAC-Telnet client. */
 	int mactelnet_argc = argc;
 	int i;
@@ -485,9 +577,8 @@ int main (int argc, char **argv) {
 				break;
 
 			case 'c':
-				/* Save ssh executable path */
-				strncpy(ssh_path, optarg, sizeof(ssh_path) - 1);
-				ssh_path[sizeof(ssh_path) - 1] = '\0';
+				ssh_commands[0] = optarg;
+				ssh_commands[1] = NULL;
 				break;
 
 			case 't':
@@ -547,7 +638,8 @@ int main (int argc, char **argv) {
 			"                 SSH Client.\n"
 			"  -P <port>      Local TCP port for forwarding SSH connection.\n"
 			"                 (If not specified, port 2222 by default.)\n"
-			"  -c <path>      Path for ssh client executable. (Default: /usr/bin/ssh)\n"
+			"  -c <cmdspec>   Override command used for the SSH connection.\n"
+			"                 Use %%{user} and %%{port} to substitute the corresponding values.\n"
 			"  -q             Quiet mode.\n"
 			"  -v             Print version and exit.\n"
 			"  -h             This help.\n"
@@ -556,37 +648,6 @@ int main (int argc, char **argv) {
 			"\n");
 		}
 		return 1;
-	}
-
-	/* Setup command line for ssh client */
-	if (launch_ssh) {
-		int ssh_argc;
-		int add_argc;
-		ssh_argc = argc - mactelnet_argc;
-		add_argc = ssh_argc;
-		ssh_argc += 3; /* Port option and hostname: -p <port> <host>*/
-		if (have_username) {
-			ssh_argc += 2;  /* Login name option: -l <user> */
-		}
-		ssh_argv = (char **) calloc(sizeof(char *), ssh_argc + 1);
-		char *ssh_path_c = strndup(ssh_path, sizeof(ssh_path) - 1);
-		char *ssh_filename = basename(ssh_path_c);
-		int idx = 0;
-		ssh_argv[idx++] = ssh_filename;
-		int i;
-		for (i = 1; i < add_argc; i++) {
-			ssh_argv[idx++] = argv[mactelnet_argc + i];
-		}
-		char portstr[8];
-		snprintf(portstr, 8, "%d", fwdport);
-		ssh_argv[idx++] = strdup("-p");
-		ssh_argv[idx++] = strndup(portstr, sizeof(portstr) - 1);
-		if (have_username) {
-			ssh_argv[idx++] = strdup("-l");
-			ssh_argv[idx++] = username;
-		}
-		ssh_argv[idx++] = strdup("127.0.0.1");
-		ssh_argv[idx++] = (char*) 0;
 	}
 
 	is_a_tty = isatty(fileno(stdout)) && isatty(fileno(stdin));
@@ -726,7 +787,9 @@ int main (int argc, char **argv) {
 			sleep(2);
 
 			/* Execute SSH Client. */
-			execvp(ssh_path, ssh_argv);
+			exec_ssh(username, fwdport,
+			         argc - mactelnet_argc - 1, &argv[mactelnet_argc + 1]);
+
 			perror("Execution of terminal client failed.");
 			exit(1);
 		}
