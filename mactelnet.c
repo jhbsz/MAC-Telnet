@@ -87,8 +87,8 @@ static int batch_mode = 0;
 static int keepalive_counter = 0;
 
 static uint8_t encryptionkey[128];
-static char username[255];
-static char password[255];
+static char username[255] = { };
+static char password[255] = { };
 static char nonpriv_username[255];
 static int sent_auth = 0;
 
@@ -513,7 +513,7 @@ int main (int argc, char **argv) {
 	struct mt_packet data;
 	struct mt_mactelnet_hdr hdr = { };
 	struct sockaddr_in si_me;
-	uint8_t print_help = 0, have_username = 0, have_password = 0;
+	uint8_t print_help = 0;
 	uint8_t drop_priv = 0;
 	int c;
 	int optval = 1;
@@ -557,15 +557,11 @@ int main (int argc, char **argv) {
 			case 'u':
 				/* Save username */
 				strncpy(username, optarg, sizeof(username) - 1);
-				username[sizeof(username) - 1] = '\0';
-				have_username = 1;
 				break;
 
 			case 'p':
 				/* Save password */
 				strncpy(password, optarg, sizeof(password) - 1);
-				password[sizeof(password) - 1] = '\0';
-				have_password = 1;
 				break;
 
 			case 'U':
@@ -693,14 +689,14 @@ int main (int argc, char **argv) {
 		return 1;
 	}
 
-	if (!tunnel_conn && !have_username) {
+	if (!tunnel_conn && !username[0]) {
 		if (!quiet_mode) {
 			printf("Login: ");
 		}
 		scanf("%254s", username);
 	}
 
-	if (!tunnel_conn && !have_password) {
+	if (!tunnel_conn && !password[0]) {
 		char *tmp = getpass(quiet_mode ? "" : "Password: ");
 		strncpy(password, tmp, sizeof(password) - 1);
 		password[sizeof(password) - 1] = '\0';
