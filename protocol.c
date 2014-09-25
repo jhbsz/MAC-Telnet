@@ -439,6 +439,9 @@ int query_mndp(const char *identity, struct ether_addr *mac) {
 	net_ifaces_all();
 	list_for_each_entry(iface, &ifaces, list)
 	{
+		if (!iface->bcast_addr.s_addr)
+			continue;
+
 		si_remote.sin_addr = iface->bcast_addr;
 		sendto(sock, &message, sizeof(message), 0,
 		       (struct sockaddr *)&si_remote, sizeof(si_remote));

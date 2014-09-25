@@ -90,6 +90,9 @@ int mndp(int timeout, int batch_mode)  {
 		net_ifaces_all();
 		list_for_each_entry(iface, &ifaces, list)
 		{
+			if (!iface->bcast_addr.s_addr)
+				continue;
+
 			si_remote.sin_addr = iface->bcast_addr;
 			sendto(sock, &message, sizeof(message), 0,
 			       (struct sockaddr *)&si_remote, sizeof(si_remote));
