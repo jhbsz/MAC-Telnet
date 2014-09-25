@@ -1,5 +1,6 @@
 
-CC?=gcc
+CC ?= gcc
+CFLAGS += -Wall -D_GNU_SOURCE
 
 # Run this with make LIBS=-lrt if you want to compile on kfreebsd
 
@@ -46,25 +47,25 @@ po/mactelnet.pot: *.c
 	xgettext --package-name=mactelnet --msgid-bugs-address=haakon.nessjoen@gmail.com -d mactelnet -C -c_ -k_ -kgettext_noop *.c -o po/mactelnet.pot
 
 users.o: users.c users.h
-	${CC} -Wall ${CFLAGS} -DUSERSFILE='"/var/etc/mactelnetd.users"' -c users.c
+	${CC} ${CFLAGS} -DUSERSFILE='"/var/etc/mactelnetd.users"' -c users.c
 
 protocol.o: protocol.c protocol.h
-	${CC} -Wall ${CFLAGS} -c protocol.c
+	${CC} ${CFLAGS} -c protocol.c
 
 interfaces.o: interfaces.c interfaces.h
-	${CC} -Wall ${CFLAGS} -c interfaces.c
+	${CC} ${CFLAGS} -c interfaces.c
 
 md5.o: md5.c md5.h
-	${CC} -Wall ${CFLAGS} -c md5.c
+	${CC} ${CFLAGS} -c md5.c
 
 mactelnet: config.h mactelnet.c mactelnet.h protocol.o console.c console.h interfaces.o users.o users.h md5.o mndp.c
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mactelnet mactelnet.c protocol.o console.c interfaces.o users.o md5.o -DFROM_MACTELNET mndp.c ${LIBS}
+	${CC} ${CFLAGS} ${LDFLAGS} -o mactelnet mactelnet.c protocol.o console.c interfaces.o users.o md5.o -DFROM_MACTELNET mndp.c ${LIBS}
 
 mactelnetd: config.h mactelnetd.c protocol.o interfaces.o console.c console.h users.o users.h
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -lubox -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o ${LIBS}
+	${CC} ${CFLAGS} ${LDFLAGS} -o mactelnetd mactelnetd.c protocol.o console.c interfaces.o users.o ${LIBS} -lubox
 
 mndp: config.h mndp.c protocol.o interfaces.o
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o interfaces.o ${LIBS}
+	${CC} ${CFLAGS} ${LDFLAGS} -o mndp mndp.c protocol.o interfaces.o ${LIBS}
 
 macping: config.h macping.c interfaces.o protocol.o
-	${CC} -Wall ${CFLAGS} ${LDFLAGS} -o macping macping.c interfaces.o protocol.o ${LIBS}
+	${CC} ${CFLAGS} ${LDFLAGS} -o macping macping.c interfaces.o protocol.o ${LIBS}
