@@ -701,15 +701,11 @@ int main (int argc, char **argv) {
 	}
 
 	if (!tunnel_conn && !have_password) {
-		char *tmp;
-		tmp = getpass(quiet_mode ? "" : "Password: ");
+		char *tmp = getpass(quiet_mode ? "" : "Password: ");
 		strncpy(password, tmp, sizeof(password) - 1);
 		password[sizeof(password) - 1] = '\0';
 		/* security */
 		memset(tmp, 0, strlen(tmp));
-#ifdef __GNUC__
-		free(tmp);
-#endif
 	}
 
 	if (tunnel_conn) {
