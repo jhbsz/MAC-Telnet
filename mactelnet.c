@@ -692,6 +692,7 @@ int main (int argc, char **argv) {
 	if (!tunnel_conn && !username[0]) {
 		if (!quiet_mode) {
 			printf("Login: ");
+			fflush(stdout);
 		}
 		scanf("%254s", username);
 	}
