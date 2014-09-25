@@ -39,7 +39,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <string.h>
-#include <linux/if_ether.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/sysinfo.h>
