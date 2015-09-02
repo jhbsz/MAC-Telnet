@@ -728,7 +728,7 @@ static void recv_mndp(struct uloop_fd *ufd, uint32_t ev)
 {
 	int len = net_recv_packet(ufd->fd, NULL, NULL);
 
-	if (len < 4)
+	if (len != 4)
 		return;
 
 	/* max 1 rps */
